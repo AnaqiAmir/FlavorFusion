@@ -1,0 +1,19 @@
+{
+  "nuts": [
+    "peanut",
+    "peanut butter",
+    "almond",
+    "cashew",
+    "hazelnut",
+    "pistachio",
+    "walnut",
+    "pecan",
+    "nutella",
+    "marzipan"
+  ],
+  "dairy": ["milk", "butter", "cheese", "cream", "yogurt", "whey"],
+  "gluten": ["wheat", "barley", "rye", "oats", "flour", "bread", "pasta"],
+  "soy": ["soybean", "tofu", "edamame", "miso"],
+  "shellfish": ["shrimp", "crab", "lobster", "prawn", "crayfish"],
+  "eggs": ["egg", "egg white", "mayonnaise"]
+}
