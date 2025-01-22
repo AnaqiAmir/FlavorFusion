@@ -5,3 +5,4 @@
     url = https://dagshub.com/anaqi.amirrazif/FlavorFusion.dvc
 ['remote "dagshub"']
     url = https://dagshub.com/anaqi.amirrazif/FlavorFusion.dvc
+    auth = basic
