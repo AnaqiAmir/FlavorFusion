@@ -80,11 +80,11 @@ class faiss_model():
         # BUILD: Initialize index for FAISS
         self.vector_size = len(self.unique_ingredients)
         self.index = faiss.IndexFlatL2(self.vector_size)
-        self.vectors = np.vstack([self.encode_ingredients(ing, self.ingredient_to_idx, self.unique_ingredients)
-                                  for ing in recipes_df['ingredient_names']])
+        self.vectors = np.vstack([self._encode_all_ingredients(ingredients, self.ingredient_to_idx, self.unique_ingredients)
+                                  for ingredients in recipes_df['ingredient_names']])
         self.index.add(self.vectors)
 
-    def encode_ingredients(self, ingredients, ingredient_to_idx, unique_ingredients):
+    def _encode_all_ingredients(self, ingredients: list, ingredient_to_idx: dict, unique_ingredients: list):
         """
         Generate vector encodings for ingredients-to-recipes.
 
@@ -98,7 +98,24 @@ class faiss_model():
         """
         vector = np.zeros(len(unique_ingredients), dtype='float32')
         for ingredient in ingredients:
-            if ingredient in ingredient_to_idx:
+            vector[ingredient_to_idx[ingredient]] = 1.0
+        return vector
+
+    def _encode_user_ingredients(self, ingredients, ingredient_to_idx, unique_ingredients):
+        """
+        Generate vector encodings for ingredients-to-recipes.
+
+        Args:
+        - ingredients (list): A list of ingredients in the recipe.
+        - ingredient_to_idx (dict): A dict mapping ingredients to their respective ids.
+        - unique_ingredients (list): A list of unique ingredients.
+
+        Returns:
+        - vector (np.array): An encoding of which ingredients are in the recipe w.r.t to all available ingredients.
+        """
+        vector = np.zeros(len(unique_ingredients), dtype='float32')
+        for ingredient in ingredients:
+            if ingredient in unique_ingredients:
                 vector[ingredient_to_idx[ingredient]] = 1.0
         return vector
 
@@ -175,8 +192,9 @@ class faiss_model():
         ]
         return filtered_recipes
 
-    def recommend_recipes(self, user_ingredients, allergens=[''], calories=None, total_fat=None, sugar=None,
-                      sodium=None, protein=None, saturated_fat=None, carbs=None, top_n=5):
+    def recommend_recipes(self, user_ingredients: list, allergens: list=[''], calories: float=None, total_fat: float=None,
+                          sugar: float=None, sodium: float=None, protein: float=None, saturated_fat: float=None, carbs: float=None,
+                          top_n: int=5):
         """
         Gives a list of top_n recommended recipes based on the given user_ingredients.
 
@@ -203,10 +221,10 @@ class faiss_model():
                                                  sugar, sodium, protein, saturated_fat, carbs)
         filtered_ids = filtered_recipes.index
         filtered_ids  = [id_ for id_ in range(self.index.ntotal) if id_ in filtered_ids]
-        id_selector =faiss.IDSelectorArray(filtered_ids)
+        id_selector = faiss.IDSelectorArray(filtered_ids)
 
         # SEARCH
-        user_vector = self.encode_ingredients(user_ingredients, self.ingredient_to_idx, self.unique_ingredients).reshape(1,-1)
+        user_vector = self._encode_user_ingredients(user_ingredients, self.ingredient_to_idx, self.unique_ingredients).reshape(1,-1)
         _, filtered_indices = self.index.search(user_vector, k=top_n, params=faiss.SearchParametersIVF(sel=id_selector))
         return self.recipes_df.iloc[filtered_indices[0]]['name'].tolist()
 
