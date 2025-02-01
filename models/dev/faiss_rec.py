@@ -79,7 +79,7 @@ class faiss_model():
 
         # BUILD: Initialize index for FAISS
         self.vector_size = len(self.unique_ingredients)
-        self.index = faiss.IndexFlatL2(self.vector_size)
+        self.index = faiss.IndexFlatIP(self.vector_size)
         self.vectors = np.vstack([self._encode_all_ingredients(ingredients, self.ingredient_to_idx, self.unique_ingredients)
                                   for ingredients in recipes_df['ingredient_names']])
         self.index.add(self.vectors)
@@ -162,7 +162,7 @@ class faiss_model():
         carbs_min, carbs_max = self._get_min_max(nutrition='carbs', value=carbs)
 
         # Filter recipes within the specified range for any nutritional component
-        filtered_recipes = recipes_df[
+        unwanted_recipes = recipes_df[
             (recipes_df['calories (#)'] <= calorie_min) | (recipes_df['calories (#)'] >= calorie_max) |
             (recipes_df['total_fat (%DV)'] <= total_fat_min) | (recipes_df['total_fat (%DV)'] >= total_fat_max) |
             (recipes_df['sugar (%DV)'] <= sugar_min) | (recipes_df['sugar (%DV)'] >= sugar_max) |
@@ -171,9 +171,9 @@ class faiss_model():
             (recipes_df['saturated_fat (%DV)'] <= saturated_fat_min) | (recipes_df['saturated_fat (%DV)'] >= saturated_fat_max) |
             (recipes_df['carbs (%DV)'] <= carbs_min) | (recipes_df['carbs (%DV)'] >= carbs_max)
         ]
-        remaining_recipes = recipes_df.drop(filtered_recipes.index)
+        filtered_recipes = recipes_df.drop(unwanted_recipes.index)
 
-        return remaining_recipes
+        return filtered_recipes
 
     def recommend_recipes(self, user_ingredients: list, allergens: list=[''], calories: float=None, total_fat: float=None,
                           sugar: float=None, sodium: float=None, protein: float=None, saturated_fat: float=None, carbs: float=None,
@@ -203,12 +203,11 @@ class faiss_model():
         filtered_recipes = self._nutrition_filter(filtered_recipes, calories, total_fat,
                                                  sugar, sodium, protein, saturated_fat, carbs)
         filtered_ids = filtered_recipes.index
-        filtered_ids  = [id_ for id_ in range(self.index.ntotal) if id_ in filtered_ids]
         id_selector = faiss.IDSelectorArray(filtered_ids)
 
         # SEARCH
         user_vector = self._encode_user_ingredients(user_ingredients, self.ingredient_to_idx, self.unique_ingredients).reshape(1,-1)
-        _, filtered_indices = self.index.search(user_vector, k=top_n, params=faiss.SearchParametersIVF(sel=id_selector))
+        _, filtered_indices = self.index.search(user_vector, k=top_n, params=faiss.SearchParameters(sel=id_selector))
         return self.recipes_df.iloc[filtered_indices[0]]['name'].tolist()
 
 ###################
@@ -216,15 +215,25 @@ class faiss_model():
 ###################
 
 if __name__ == "__main__":
+    import time
+
     # Load data
     simple_recipes = pd.read_csv("data/simple_recipes.csv")
     simple_recipes['ingredient_names'] = simple_recipes['ingredient_names'].apply(ast.literal_eval)
 
     # Test on "aromatic basmati rice  rice cooker" ingredients
+    start = time.time()
     model = faiss_model(simple_recipes)
+    end = time.time()
+    print("Build time: ", end-start)
+
+    start = time.time()
     recs = model.recommend_recipes(user_ingredients=['basmati rice', 'water', 'salt', 'cinnamon stick', 'green cardamom pod'],
-                                   allergens=['taro','raw cashew'],
-                                   calories=225,  # range = (202.5, 247.5)
-                                   sugar=2,
+                                   #allergens=['goat cheese'],
+                                   #calories=225,  # range = (202.5, 247.5)
+                                   #sugar=2,
                                    top_n=11)
+    end = time.time()
+    print("Search time: ", end-start)
+
     print(recs)
