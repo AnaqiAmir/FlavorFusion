@@ -54,7 +54,7 @@ class faiss_model():
         recommendations = model.recommend_recipes(user_ingredients, calories=500, top_n=5)
         print(recommendations)
     """
-    def __init__(self, recipes_df):
+    def __init__(self, recipes_df: pd.DataFrame):
         """
         Initializes the FAISS model with recipe data and builds the FAISS index.
 
@@ -101,7 +101,7 @@ class faiss_model():
             vector[ingredient_to_idx[ingredient]] = 1.0
         return vector
 
-    def _encode_user_ingredients(self, ingredients, ingredient_to_idx, unique_ingredients):
+    def _encode_user_ingredients(self, ingredients: list, ingredient_to_idx: dict, unique_ingredients: list):
         """
         Generate vector encodings for ingredients-to-recipes.
 
@@ -119,41 +119,23 @@ class faiss_model():
                 vector[ingredient_to_idx[ingredient]] = 1.0
         return vector
 
-    def get_min_max_calories(self, value):
-        """
-        Calculate the minimum and maximum calorie range.
+    def _get_min_max(self, nutrition: str, value: int | None) -> tuple[float, float]:
+        DEFAULT_MIN = 0
+        DEFAULT_MAX = 10000
+        CALORIE_RANGE_MIN = 0.9
+        CALORIE_RANGE_MAX = 1.1
+        OTHER_RANGE_MIN = 0.5
+        OTHER_RANGE_MAX = 1.5
 
-        This function returns a range of values within ±10% of the given value.
-        If the input value is None, it defaults to the range (0, 10000).
+        if value is None:
+            return (DEFAULT_MIN, DEFAULT_MAX)
+        if nutrition == 'calorie':
+            return (value*CALORIE_RANGE_MIN, value*CALORIE_RANGE_MAX)
+        return (value*OTHER_RANGE_MIN, value*OTHER_RANGE_MAX)
 
-        Args:
-        - value (float or None): The calorie value to calculate the range for.
-
-        Returns:
-        - tuple: A tuple containing the minimum and maximum values.
-                If value is not None, returns (value * 0.9, value * 1.1).
-                Otherwise, returns (0, 10000).
-        """
-        return (value * 0.9, value * 1.1) if value is not None else (0, 10000)
-
-    def get_min_max(self, value):
-        """
-        Calculate the minimum and maximum nutritional range.
-
-        This function returns a range of values within ±50% of the given value.
-        If the input value is None, it defaults to the range (0, 10000).
-
-        Args:
-        - value (float or None): The nutritional value to calculate the range for.
-
-        Returns:
-        - tuple: A tuple containing the minimum and maximum values.
-                If value is not None, returns (value * 0.9, value * 1.1).
-                Otherwise, returns (0, 10000).
-        """
-        return (value * 0.5, value * 1.5) if value is not None else (0, 10000)
-
-    def nutrition_filter(self, recipes_df, calories, total_fat, sugar, sodium, protein, saturated_fat, carbs):
+    def _nutrition_filter(self, recipes_df: pd.DataFrame, calories: float | None, total_fat: float | None,
+                          sugar: float | None, sodium: float | None, protein: float | None,
+                          saturated_fat: float | None, carbs: float | None) -> pd.DataFrame:
         """
         Filter recipes based on user-specified nutritional constraints.
 
@@ -170,31 +152,32 @@ class faiss_model():
         Returns:
         - DataFrame: A dataframe that only contains recipes within the specified constraint.
         """
-
         # Calculate the min-max ranges for each nutritional component
-        calorie_min, calorie_max = self.get_min_max_calories(calories)
-        total_fat_min, total_fat_max = self.get_min_max(total_fat)
-        sugar_min, sugar_max = self.get_min_max(sugar)
-        sodium_min, sodium_max = self.get_min_max(sodium)
-        protein_min, protein_max = self.get_min_max(protein)
-        saturated_fat_min, saturated_fat_max = self.get_min_max(saturated_fat)
-        carbs_min, carbs_max = self.get_min_max(carbs)
+        calorie_min, calorie_max = self._get_min_max(nutrition='calorie', value=calories)
+        total_fat_min, total_fat_max = self._get_min_max(nutrition='total_fat', value=total_fat)
+        sugar_min, sugar_max = self._get_min_max(nutrition='sugar', value=sugar)
+        sodium_min, sodium_max = self._get_min_max(nutrition='sodium', value=sodium)
+        protein_min, protein_max = self._get_min_max(nutrition='protein', value=protein)
+        saturated_fat_min, saturated_fat_max = self._get_min_max(nutrition='saturated_fat', value=saturated_fat)
+        carbs_min, carbs_max = self._get_min_max(nutrition='carbs', value=carbs)
 
         # Filter recipes within the specified range for any nutritional component
         filtered_recipes = recipes_df[
-            (recipes_df['calories (#)'] > calorie_min) & (recipes_df['calories (#)'] < calorie_max) &
-            (recipes_df['total_fat (%DV)'] > total_fat_min) & (recipes_df['total_fat (%DV)'] < total_fat_max) &
-            (recipes_df['sugar (%DV)'] > sugar_min) & (recipes_df['sugar (%DV)'] < sugar_max) &
-            (recipes_df['sodium (%DV)'] > sodium_min) & (recipes_df['sodium (%DV)'] < sodium_max) &
-            (recipes_df['protein (%DV)'] > protein_min) & (recipes_df['protein (%DV)'] < protein_max) &
-            (recipes_df['saturated_fat (%DV)'] > saturated_fat_min) & (recipes_df['saturated_fat (%DV)'] < saturated_fat_max) &
-            (recipes_df['carbs (%DV)'] > carbs_min) & (recipes_df['carbs (%DV)'] < carbs_max)
+            (recipes_df['calories (#)'] <= calorie_min) | (recipes_df['calories (#)'] >= calorie_max) |
+            (recipes_df['total_fat (%DV)'] <= total_fat_min) | (recipes_df['total_fat (%DV)'] >= total_fat_max) |
+            (recipes_df['sugar (%DV)'] <= sugar_min) | (recipes_df['sugar (%DV)'] >= sugar_max) |
+            (recipes_df['sodium (%DV)'] <= sodium_min) | (recipes_df['sodium (%DV)'] >= sodium_max) |
+            (recipes_df['protein (%DV)'] <= protein_min) | (recipes_df['protein (%DV)'] >= protein_max) |
+            (recipes_df['saturated_fat (%DV)'] <= saturated_fat_min) | (recipes_df['saturated_fat (%DV)'] >= saturated_fat_max) |
+            (recipes_df['carbs (%DV)'] <= carbs_min) | (recipes_df['carbs (%DV)'] >= carbs_max)
         ]
-        return filtered_recipes
+        remaining_recipes = recipes_df.drop(filtered_recipes.index)
+
+        return remaining_recipes
 
     def recommend_recipes(self, user_ingredients: list, allergens: list=[''], calories: float=None, total_fat: float=None,
                           sugar: float=None, sodium: float=None, protein: float=None, saturated_fat: float=None, carbs: float=None,
-                          top_n: int=5):
+                          top_n: int=5) -> list:
         """
         Gives a list of top_n recommended recipes based on the given user_ingredients.
 
@@ -217,7 +200,7 @@ class faiss_model():
         # FILTER: Filter out index of filtered recipes
         filtered_recipes = self.recipes_df[~self.recipes_df['ingredient_names']
                                            .apply(lambda ingredients: any(item in allergens for item in ingredients))]
-        filtered_recipes = self.nutrition_filter(filtered_recipes, calories, total_fat,
+        filtered_recipes = self._nutrition_filter(filtered_recipes, calories, total_fat,
                                                  sugar, sodium, protein, saturated_fat, carbs)
         filtered_ids = filtered_recipes.index
         filtered_ids  = [id_ for id_ in range(self.index.ntotal) if id_ in filtered_ids]
