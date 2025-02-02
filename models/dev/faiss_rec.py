@@ -77,9 +77,31 @@ class faiss_model():
                                              for ingredient in ingredients))
         self.ingredient_to_idx = {ingredient: idx for idx, ingredient in enumerate(self.unique_ingredients)}
 
+        # Find min max values of each nutrition
+        self.CALORIE_MIN = self.recipes_df['calories (#)'].min()
+        self.CALORIE_MAX = self.recipes_df['calories (#)'].max()
+
+        self.TOTAL_FAT_MIN = self.recipes_df['total_fat (g)'].min()
+        self.TOTAL_FAT_MAX = self.recipes_df['total_fat (g)'].max()
+
+        self.SUGAR_MIN = self.recipes_df['sugar (g)'].min()
+        self.SUGAR_MAX = self.recipes_df['sugar (g)'].max()
+
+        self.SODIUM_MIN = self.recipes_df['sodium (mg)'].min()
+        self.SODIUM_MAX = self.recipes_df['sodium (mg)'].max()
+
+        self.PROTEIN_MIN = self.recipes_df['protein (g)'].min()
+        self.PROTEIN_MAX = self.recipes_df['protein (g)'].max()
+
+        self.SATURATED_FAT_MIN = self.recipes_df['saturated_fat (g)'].min()
+        self.SATURATED_FAT_MAX = self.recipes_df['saturated_fat (g)'].max()
+
+        self.CARBS_MIN = self.recipes_df['carbs (g)'].min()
+        self.CARBS_MAX = self.recipes_df['carbs (g)'].max()
+
         # BUILD: Initialize index for FAISS
         self.vector_size = len(self.unique_ingredients)
-        self.index = faiss.IndexFlatIP(self.vector_size)
+        self.index = faiss.IndexFlatL2(self.vector_size)
         self.vectors = np.vstack([self._encode_all_ingredients(ingredients, self.ingredient_to_idx, self.unique_ingredients)
                                   for ingredients in recipes_df['ingredient_names']])
         self.index.add(self.vectors)
@@ -119,23 +141,17 @@ class faiss_model():
                 vector[ingredient_to_idx[ingredient]] = 1.0
         return vector
 
-    def _get_min_max(self, nutrition: str, value: int | None) -> tuple[float, float]:
-        DEFAULT_MIN = 0
-        DEFAULT_MAX = 10000
-        CALORIE_RANGE_MIN = 0.9
-        CALORIE_RANGE_MAX = 1.1
-        OTHER_RANGE_MIN = 0.5
-        OTHER_RANGE_MAX = 1.5
-
-        if value is None:
-            return (DEFAULT_MIN, DEFAULT_MAX)
-        if nutrition == 'calorie':
-            return (value*CALORIE_RANGE_MIN, value*CALORIE_RANGE_MAX)
-        return (value*OTHER_RANGE_MIN, value*OTHER_RANGE_MAX)
-
-    def _nutrition_filter(self, recipes_df: pd.DataFrame, calories: float | None, total_fat: float | None,
-                          sugar: float | None, sodium: float | None, protein: float | None,
-                          saturated_fat: float | None, carbs: float | None) -> pd.DataFrame:
+    def _nutrition_filter(
+        self,
+        recipes_df: pd.DataFrame,
+        calories,
+        total_fat,
+        sugar,
+        sodium,
+        protein,
+        saturated_fat,
+        carbs
+    ) -> pd.DataFrame:
         """
         Filter recipes based on user-specified nutritional constraints.
 
@@ -152,32 +168,42 @@ class faiss_model():
         Returns:
         - DataFrame: A dataframe that only contains recipes within the specified constraint.
         """
-        # Calculate the min-max ranges for each nutritional component
-        calorie_min, calorie_max = self._get_min_max(nutrition='calorie', value=calories)
-        total_fat_min, total_fat_max = self._get_min_max(nutrition='total_fat', value=total_fat)
-        sugar_min, sugar_max = self._get_min_max(nutrition='sugar', value=sugar)
-        sodium_min, sodium_max = self._get_min_max(nutrition='sodium', value=sodium)
-        protein_min, protein_max = self._get_min_max(nutrition='protein', value=protein)
-        saturated_fat_min, saturated_fat_max = self._get_min_max(nutrition='saturated_fat', value=saturated_fat)
-        carbs_min, carbs_max = self._get_min_max(nutrition='carbs', value=carbs)
+        # Get min max of each nutrition
+        calorie_min, calorie_max = calories
+        total_fat_min, total_fat_max = total_fat
+        sugar_min, sugar_max = sugar
+        sodium_min, sodium_max = sodium
+        protein_min, protein_max = protein
+        saturated_fat_min, saturated_fat_max = saturated_fat
+        carbs_min, carbs_max = carbs
 
-        # Filter recipes within the specified range for any nutritional component
+        # Filter recipes to be within the specified range for any nutritional component
         unwanted_recipes = recipes_df[
             (recipes_df['calories (#)'] <= calorie_min) | (recipes_df['calories (#)'] >= calorie_max) |
-            (recipes_df['total_fat (%DV)'] <= total_fat_min) | (recipes_df['total_fat (%DV)'] >= total_fat_max) |
-            (recipes_df['sugar (%DV)'] <= sugar_min) | (recipes_df['sugar (%DV)'] >= sugar_max) |
-            (recipes_df['sodium (%DV)'] <= sodium_min) | (recipes_df['sodium (%DV)'] >= sodium_max) |
-            (recipes_df['protein (%DV)'] <= protein_min) | (recipes_df['protein (%DV)'] >= protein_max) |
-            (recipes_df['saturated_fat (%DV)'] <= saturated_fat_min) | (recipes_df['saturated_fat (%DV)'] >= saturated_fat_max) |
-            (recipes_df['carbs (%DV)'] <= carbs_min) | (recipes_df['carbs (%DV)'] >= carbs_max)
+            (recipes_df['total_fat (g)'] <= total_fat_min) | (recipes_df['total_fat (g)'] >= total_fat_max) |
+            (recipes_df['sugar (g)'] <= sugar_min) | (recipes_df['sugar (g)'] >= sugar_max) |
+            (recipes_df['sodium (mg)'] <= sodium_min) | (recipes_df['sodium (mg)'] >= sodium_max) |
+            (recipes_df['protein (g)'] <= protein_min) | (recipes_df['protein (g)'] >= protein_max) |
+            (recipes_df['saturated_fat (g)'] <= saturated_fat_min) | (recipes_df['saturated_fat (g)'] >= saturated_fat_max) |
+            (recipes_df['carbs (g)'] <= carbs_min) | (recipes_df['carbs (g)'] >= carbs_max)
         ]
         filtered_recipes = recipes_df.drop(unwanted_recipes.index)
 
         return filtered_recipes
 
-    def recommend_recipes(self, user_ingredients: list, allergens: list=[''], calories: float=None, total_fat: float=None,
-                          sugar: float=None, sodium: float=None, protein: float=None, saturated_fat: float=None, carbs: float=None,
-                          top_n: int=5) -> list:
+    def recommend_recipes(
+        self,
+        user_ingredients: list,
+        allergens: list=[''],
+        calories: tuple[float,float] = (None, None),
+        total_fat: tuple[float,float] = (None, None),
+        sugar: tuple[float,float] = (None, None),
+        sodium: tuple[float,float] = (None, None),
+        protein: tuple[float,float] = (None, None),
+        saturated_fat: tuple[float,float] = (None, None),
+        carbs: tuple[float,float] = (None, None),
+        top_n: int=5
+        ) -> list:
         """
         Gives a list of top_n recommended recipes based on the given user_ingredients.
 
@@ -185,23 +211,39 @@ class faiss_model():
         - user_ingredients (list): A list of ingredients provided by the user.
         - allergens (list): A list of allergens from the user.
                             Recipes that contain ingredients in allergens will not be recommended.
-        - calories (float): A user-specified calorie constraint.
-        - total_fat (float): A user-specified total_fat constraint.
-        - sugar (float): A user-specified sugar constraint.
-        - sodium (float): A user-specified sodium constraint.
-        - protein (float): A user-specified protein constraint.
-        - saturated_fat (float): A user-specified saturated_fat constraint.
-        - carbs (float): A user-specified carbs constraint.
+        - calories (float): A user-specified calorie (#) constraint.
+        - total_fat (float): A user-specified total_fat (grams) constraint.
+        - sugar (float): A user-specified sugar (grams) constraint.
+        - sodium (float): A user-specified sodium (miligrams) constraint.
+        - protein (float): A user-specified protein (grams) constraint.
+        - saturated_fat (float): A user-specified saturated_fat (grams) constraint.
+        - carbs (float): A user-specified carbs (grams) constraint.
         - top_n (int): The number of recommended recipes to return.
 
         Returns:
         - list: A list of recommended recipes.
         """
+        # Assign min max values for nutritions
+        if calories == (None, None):
+            calories = (self.CALORIE_MIN, self.CALORIE_MAX)
+        if total_fat == (None, None):
+            total_fat = (self.TOTAL_FAT_MIN, self.TOTAL_FAT_MAX)
+        if sugar == (None, None):
+            sugar = (self.SUGAR_MIN, self.SUGAR_MAX)
+        if sodium == (None, None):
+            sodium = (self.SODIUM_MIN, self.SODIUM_MAX)
+        if protein == (None, None):
+            protein = (self.PROTEIN_MIN, self.PROTEIN_MAX)
+        if saturated_fat == (None, None):
+            saturated_fat = (self.SATURATED_FAT_MIN, self.SATURATED_FAT_MAX)
+        if carbs == (None, None):
+            carbs = (self.CARBS_MIN, self.CARBS_MAX)
+
         # FILTER: Filter out index of filtered recipes
         filtered_recipes = self.recipes_df[~self.recipes_df['ingredient_names']
                                            .apply(lambda ingredients: any(item in allergens for item in ingredients))]
         filtered_recipes = self._nutrition_filter(filtered_recipes, calories, total_fat,
-                                                 sugar, sodium, protein, saturated_fat, carbs)
+                                                  sugar, sodium, protein, saturated_fat, carbs)
         filtered_ids = filtered_recipes.index
         id_selector = faiss.IDSelectorArray(filtered_ids)
 
@@ -229,9 +271,14 @@ if __name__ == "__main__":
 
     start = time.time()
     recs = model.recommend_recipes(user_ingredients=['basmati rice', 'water', 'salt', 'cinnamon stick', 'green cardamom pod'],
-                                   #allergens=['goat cheese'],
-                                   #calories=225,  # range = (202.5, 247.5)
-                                   #sugar=2,
+                                   allergens=['goat cheese'],
+                                   calories = (202.5, 247.5),
+                                   sugar = (0.9,1.1),
+                                   sodium = (0,10000),
+                                   saturated_fat = (0,10000),
+                                   total_fat = (0,10000),
+                                   carbs = (0,10000),
+                                   protein = (0,10000),
                                    top_n=11)
     end = time.time()
     print("Search time: ", end-start)
