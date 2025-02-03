@@ -245,7 +245,7 @@ class faiss_model():
         filtered_recipes = self._nutrition_filter(filtered_recipes, calories, total_fat,
                                                   sugar, sodium, protein, saturated_fat, carbs)
         filtered_ids = filtered_recipes.index
-        id_selector = faiss.IDSelectorArray(filtered_ids)
+        id_selector = faiss.IDSelectorBatch(filtered_ids)
 
         # SEARCH
         user_vector = self._encode_user_ingredients(user_ingredients, self.ingredient_to_idx, self.unique_ingredients).reshape(1,-1)
@@ -270,17 +270,32 @@ if __name__ == "__main__":
     print("Build time: ", end-start)
 
     start = time.time()
-    recs = model.recommend_recipes(user_ingredients=['basmati rice', 'water', 'salt', 'cinnamon stick', 'green cardamom pod'],
-                                   allergens=['goat cheese'],
-                                   calories = (202.5, 247.5),
-                                   sugar = (0.9,1.1),
-                                   sodium = (0,10000),
-                                   saturated_fat = (0,10000),
-                                   total_fat = (0,10000),
-                                   carbs = (0,10000),
-                                   protein = (0,10000),
-                                   top_n=11)
+    recs = model.recommend_recipes(
+        user_ingredients=['basmati rice', 'water', 'salt', 'cinnamon stick', 'green cardamom pod'],
+        allergens=['goat cheese'],
+        calories = (202.5, 247.5),
+        sugar = (0.9,1.1),
+        sodium = (0,10000),
+        saturated_fat = (0,10000),
+        total_fat = (0,10000),
+        carbs = (0,10000),
+        protein = (0,10000),
+        top_n=11
+    )
     end = time.time()
+    print("Recommended Recipes:")
+    for rec in recs:
+        print(rec)
     print("Search time: ", end-start)
 
-    print(recs)
+    start = time.time()
+    recs = model.recommend_recipes(
+        user_ingredients=['pumpkin'],
+        allergens=['cashew'],
+        top_n=11
+    )
+    end = time.time()
+    print("Recommended Recipes:")
+    for rec in recs:
+        print(rec)
+    print("Search time: ", end-start)
