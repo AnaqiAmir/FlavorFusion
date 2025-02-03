@@ -1,9 +1,11 @@
 import pandas as pd
 import numpy as np
+from typing import Tuple, List
 import faiss
 import ast
 
-class faiss_model():
+
+class faiss_model:
     """
     A class to build and manage a FAISS index for recipe recommendation based on ingredient similarity.
 
@@ -28,12 +30,6 @@ class faiss_model():
         encode_ingredients(ingredients, ingredient_to_idx, unique_ingredients):
             Encodes a list of ingredients into a vector representation using one-hot encoding.
 
-        get_min_max_calories(value):
-            Computes a calorie range within ±10% of a specified value. Defaults to (0, 10000) if the value is None.
-
-        get_min_max(value):
-            Computes a nutritional range within ±50% of a specified value. Defaults to (0, 10000) if the value is None.
-
         nutrition_filter(recipes_df, calories, total_fat, sugar, sodium, protein, saturated_fat, carbs):
             Filters recipes based on user-specified nutritional constraints.
 
@@ -54,6 +50,7 @@ class faiss_model():
         recommendations = model.recommend_recipes(user_ingredients, calories=500, top_n=5)
         print(recommendations)
     """
+
     def __init__(self, recipes_df: pd.DataFrame):
         """
         Initializes the FAISS model with recipe data and builds the FAISS index.
@@ -72,41 +69,52 @@ class faiss_model():
             ValueError: If the `ingredient_names` column is missing in the input DataFrame or is not iterable.
         """
         # Get unique ingredients
-        self.recipes_df = recipes_df
-        self.unique_ingredients = sorted(set(ingredient for ingredients in recipes_df['ingredient_names']
-                                             for ingredient in ingredients))
-        self.ingredient_to_idx = {ingredient: idx for idx, ingredient in enumerate(self.unique_ingredients)}
+        self.recipes_df = recipes_df.copy()
+        self.unique_ingredients = sorted(
+            set(
+                ingredient
+                for ingredients in recipes_df["ingredient_names"]
+                for ingredient in ingredients
+            )
+        )
+        self.ingredient_to_idx = {
+            ingredient: idx for idx, ingredient in enumerate(self.unique_ingredients)
+        }
 
         # Find min max values of each nutrition
-        self.CALORIE_MIN = self.recipes_df['calories (#)'].min()
-        self.CALORIE_MAX = self.recipes_df['calories (#)'].max()
+        self.CALORIE_MIN = self.recipes_df["calories (#)"].min()
+        self.CALORIE_MAX = self.recipes_df["calories (#)"].max()
 
-        self.TOTAL_FAT_MIN = self.recipes_df['total_fat (g)'].min()
-        self.TOTAL_FAT_MAX = self.recipes_df['total_fat (g)'].max()
+        self.TOTAL_FAT_MIN = self.recipes_df["total_fat (g)"].min()
+        self.TOTAL_FAT_MAX = self.recipes_df["total_fat (g)"].max()
 
-        self.SUGAR_MIN = self.recipes_df['sugar (g)'].min()
-        self.SUGAR_MAX = self.recipes_df['sugar (g)'].max()
+        self.SUGAR_MIN = self.recipes_df["sugar (g)"].min()
+        self.SUGAR_MAX = self.recipes_df["sugar (g)"].max()
 
-        self.SODIUM_MIN = self.recipes_df['sodium (mg)'].min()
-        self.SODIUM_MAX = self.recipes_df['sodium (mg)'].max()
+        self.SODIUM_MIN = self.recipes_df["sodium (mg)"].min()
+        self.SODIUM_MAX = self.recipes_df["sodium (mg)"].max()
 
-        self.PROTEIN_MIN = self.recipes_df['protein (g)'].min()
-        self.PROTEIN_MAX = self.recipes_df['protein (g)'].max()
+        self.PROTEIN_MIN = self.recipes_df["protein (g)"].min()
+        self.PROTEIN_MAX = self.recipes_df["protein (g)"].max()
 
-        self.SATURATED_FAT_MIN = self.recipes_df['saturated_fat (g)'].min()
-        self.SATURATED_FAT_MAX = self.recipes_df['saturated_fat (g)'].max()
+        self.SATURATED_FAT_MIN = self.recipes_df["saturated_fat (g)"].min()
+        self.SATURATED_FAT_MAX = self.recipes_df["saturated_fat (g)"].max()
 
-        self.CARBS_MIN = self.recipes_df['carbs (g)'].min()
-        self.CARBS_MAX = self.recipes_df['carbs (g)'].max()
+        self.CARBS_MIN = self.recipes_df["carbs (g)"].min()
+        self.CARBS_MAX = self.recipes_df["carbs (g)"].max()
 
         # BUILD: Initialize index for FAISS
         self.vector_size = len(self.unique_ingredients)
+        self.vectors = np.vstack(
+            [
+                self._encode_all_ingredients(ingredients)
+                for ingredients in self.recipes_df["ingredient_names"]
+            ]
+        )
         self.index = faiss.IndexFlatL2(self.vector_size)
-        self.vectors = np.vstack([self._encode_all_ingredients(ingredients, self.ingredient_to_idx, self.unique_ingredients)
-                                  for ingredients in recipes_df['ingredient_names']])
         self.index.add(self.vectors)
 
-    def _encode_all_ingredients(self, ingredients: list, ingredient_to_idx: dict, unique_ingredients: list):
+    def _encode_all_ingredients(self, ingredients: list) -> np.array:
         """
         Generate vector encodings for ingredients-to-recipes.
 
@@ -118,12 +126,12 @@ class faiss_model():
         Returns:
         - vector (np.array): An encoding of which ingredients are in the recipe w.r.t to all available ingredients.
         """
-        vector = np.zeros(len(unique_ingredients), dtype='float32')
+        vector = np.zeros(len(self.unique_ingredients), dtype="float32")
         for ingredient in ingredients:
-            vector[ingredient_to_idx[ingredient]] = 1.0
+            vector[self.ingredient_to_idx[ingredient]] = 1.0
         return vector
 
-    def _encode_user_ingredients(self, ingredients: list, ingredient_to_idx: dict, unique_ingredients: list):
+    def _encode_user_ingredients(self, ingredients: list) -> np.array:
         """
         Generate vector encodings for ingredients-to-recipes.
 
@@ -135,22 +143,22 @@ class faiss_model():
         Returns:
         - vector (np.array): An encoding of which ingredients are in the recipe w.r.t to all available ingredients.
         """
-        vector = np.zeros(len(unique_ingredients), dtype='float32')
+        vector = np.zeros(len(self.unique_ingredients), dtype="float32")
         for ingredient in ingredients:
-            if ingredient in unique_ingredients:
-                vector[ingredient_to_idx[ingredient]] = 1.0
+            if ingredient in self.unique_ingredients:
+                vector[self.ingredient_to_idx[ingredient]] = 1.0
         return vector
 
     def _nutrition_filter(
         self,
         recipes_df: pd.DataFrame,
-        calories,
-        total_fat,
-        sugar,
-        sodium,
-        protein,
-        saturated_fat,
-        carbs
+        calories: Tuple[float, float],
+        total_fat: Tuple[float, float],
+        sugar: Tuple[float, float],
+        sodium: Tuple[float, float],
+        protein: Tuple[float, float],
+        saturated_fat: Tuple[float, float],
+        carbs: Tuple[float, float],
     ) -> pd.DataFrame:
         """
         Filter recipes based on user-specified nutritional constraints.
@@ -168,42 +176,41 @@ class faiss_model():
         Returns:
         - DataFrame: A dataframe that only contains recipes within the specified constraint.
         """
-        # Get min max of each nutrition
-        calorie_min, calorie_max = calories
-        total_fat_min, total_fat_max = total_fat
-        sugar_min, sugar_max = sugar
-        sodium_min, sodium_max = sodium
-        protein_min, protein_max = protein
-        saturated_fat_min, saturated_fat_max = saturated_fat
-        carbs_min, carbs_max = carbs
+        # Get min-max values for each nutrition
+        nutrition_ranges = {
+            "calories (#)": calories,
+            "total_fat (g)": total_fat,
+            "sugar (g)": sugar,
+            "sodium (mg)": sodium,
+            "protein (g)": protein,
+            "saturated_fat (g)": saturated_fat,
+            "carbs (g)": carbs,
+        }
 
-        # Filter recipes to be within the specified range for any nutritional component
-        unwanted_recipes = recipes_df[
-            (recipes_df['calories (#)'] <= calorie_min) | (recipes_df['calories (#)'] >= calorie_max) |
-            (recipes_df['total_fat (g)'] <= total_fat_min) | (recipes_df['total_fat (g)'] >= total_fat_max) |
-            (recipes_df['sugar (g)'] <= sugar_min) | (recipes_df['sugar (g)'] >= sugar_max) |
-            (recipes_df['sodium (mg)'] <= sodium_min) | (recipes_df['sodium (mg)'] >= sodium_max) |
-            (recipes_df['protein (g)'] <= protein_min) | (recipes_df['protein (g)'] >= protein_max) |
-            (recipes_df['saturated_fat (g)'] <= saturated_fat_min) | (recipes_df['saturated_fat (g)'] >= saturated_fat_max) |
-            (recipes_df['carbs (g)'] <= carbs_min) | (recipes_df['carbs (g)'] >= carbs_max)
-        ]
-        filtered_recipes = recipes_df.drop(unwanted_recipes.index)
+        # Start with all rows unselected
+        mask = np.zeros(len(recipes_df), dtype=bool)
 
-        return filtered_recipes
+        # Apply each provided constraint
+        for nutrition, (min_val, max_val) in nutrition_ranges.items():
+            mask |= (recipes_df[nutrition] <= min_val) | (
+                recipes_df[nutrition] >= max_val
+            )
+
+        return recipes_df[~mask]
 
     def recommend_recipes(
         self,
-        user_ingredients: list,
-        allergens: list=[''],
-        calories: tuple[float,float] = (None, None),
-        total_fat: tuple[float,float] = (None, None),
-        sugar: tuple[float,float] = (None, None),
-        sodium: tuple[float,float] = (None, None),
-        protein: tuple[float,float] = (None, None),
-        saturated_fat: tuple[float,float] = (None, None),
-        carbs: tuple[float,float] = (None, None),
-        top_n: int=5
-        ) -> list:
+        user_ingredients: List[str],
+        allergens: List[str] = [""],
+        calories: Tuple[float, float] = (None, None),
+        total_fat: Tuple[float, float] = (None, None),
+        sugar: Tuple[float, float] = (None, None),
+        sodium: Tuple[float, float] = (None, None),
+        protein: Tuple[float, float] = (None, None),
+        saturated_fat: Tuple[float, float] = (None, None),
+        carbs: Tuple[float, float] = (None, None),
+        top_n: int = 5,
+    ) -> List[str]:
         """
         Gives a list of top_n recommended recipes based on the given user_ingredients.
 
@@ -224,33 +231,58 @@ class faiss_model():
         - list: A list of recommended recipes.
         """
         # Assign min max values for nutritions
-        if calories == (None, None):
-            calories = (self.CALORIE_MIN, self.CALORIE_MAX)
-        if total_fat == (None, None):
-            total_fat = (self.TOTAL_FAT_MIN, self.TOTAL_FAT_MAX)
-        if sugar == (None, None):
-            sugar = (self.SUGAR_MIN, self.SUGAR_MAX)
-        if sodium == (None, None):
-            sodium = (self.SODIUM_MIN, self.SODIUM_MAX)
-        if protein == (None, None):
-            protein = (self.PROTEIN_MIN, self.PROTEIN_MAX)
-        if saturated_fat == (None, None):
-            saturated_fat = (self.SATURATED_FAT_MIN, self.SATURATED_FAT_MAX)
-        if carbs == (None, None):
-            carbs = (self.CARBS_MIN, self.CARBS_MAX)
+        nutrition_defaults = {
+            "calories": (self.CALORIE_MIN, self.CALORIE_MAX),
+            "total_fat": (self.TOTAL_FAT_MIN, self.TOTAL_FAT_MAX),
+            "sugar": (self.SUGAR_MIN, self.SUGAR_MAX),
+            "sodium": (self.SODIUM_MIN, self.SODIUM_MAX),
+            "protein": (self.PROTEIN_MIN, self.PROTEIN_MAX),
+            "saturated_fat": (self.SATURATED_FAT_MIN, self.SATURATED_FAT_MAX),
+            "carbs": (self.CARBS_MIN, self.CARBS_MAX),
+        }
+
+        # Dictionary to store the final nutrition constraints
+        nutrition_constraints = {
+            "calories": calories,
+            "total_fat": total_fat,
+            "sugar": sugar,
+            "sodium": sodium,
+            "protein": protein,
+            "saturated_fat": saturated_fat,
+            "carbs": carbs,
+        }
+
+        # Update constraints with defaults if not provided
+        for nutrient, default in nutrition_defaults.items():
+            if nutrition_constraints[nutrient] == (None, None):
+                nutrition_constraints[nutrient] = default
 
         # FILTER: Filter out index of filtered recipes
-        filtered_recipes = self.recipes_df[~self.recipes_df['ingredient_names']
-                                           .apply(lambda ingredients: any(item in allergens for item in ingredients))]
-        filtered_recipes = self._nutrition_filter(filtered_recipes, calories, total_fat,
-                                                  sugar, sodium, protein, saturated_fat, carbs)
+        filtered_recipes = self.recipes_df[
+            ~self.recipes_df["ingredient_names"].apply(
+                lambda ingredients: any(item in allergens for item in ingredients)
+            )
+        ]
+        filtered_recipes = self._nutrition_filter(
+            filtered_recipes,
+            nutrition_constraints["calories"],
+            nutrition_constraints["total_fat"],
+            nutrition_constraints["sugar"],
+            nutrition_constraints["sodium"],
+            nutrition_constraints["protein"],
+            nutrition_constraints["saturated_fat"],
+            nutrition_constraints["carbs"],
+        )
         filtered_ids = filtered_recipes.index
         id_selector = faiss.IDSelectorBatch(filtered_ids)
 
         # SEARCH
-        user_vector = self._encode_user_ingredients(user_ingredients, self.ingredient_to_idx, self.unique_ingredients).reshape(1,-1)
-        _, filtered_indices = self.index.search(user_vector, k=top_n, params=faiss.SearchParameters(sel=id_selector))
-        return self.recipes_df.iloc[filtered_indices[0]]['name'].tolist()
+        user_vector = self._encode_user_ingredients(user_ingredients).reshape(1, -1)
+        _, filtered_indices = self.index.search(
+            user_vector, k=top_n, params=faiss.SearchParameters(sel=id_selector)
+        )
+        return self.recipes_df.iloc[filtered_indices[0]]["name"].tolist()
+
 
 ###################
 ## Example usage ##
@@ -261,41 +293,48 @@ if __name__ == "__main__":
 
     # Load data
     simple_recipes = pd.read_csv("data/simple_recipes.csv")
-    simple_recipes['ingredient_names'] = simple_recipes['ingredient_names'].apply(ast.literal_eval)
+    simple_recipes["ingredient_names"] = simple_recipes["ingredient_names"].apply(
+        ast.literal_eval
+    )
 
     # Test on "aromatic basmati rice  rice cooker" ingredients
     start = time.time()
     model = faiss_model(simple_recipes)
     end = time.time()
-    print("Build time: ", end-start)
+    print("Build time: ", end - start)
 
     start = time.time()
     recs = model.recommend_recipes(
-        user_ingredients=['basmati rice', 'water', 'salt', 'cinnamon stick', 'green cardamom pod'],
-        allergens=['goat cheese'],
-        calories = (202.5, 247.5),
-        sugar = (0.9,1.1),
-        sodium = (0,10000),
-        saturated_fat = (0,10000),
-        total_fat = (0,10000),
-        carbs = (0,10000),
-        protein = (0,10000),
-        top_n=11
+        user_ingredients=[
+            "basmati rice",
+            "water",
+            "salt",
+            "cinnamon stick",
+            "green cardamom pod",
+        ],
+        allergens=["goat cheese"],
+        calories=(202.5, 247.5),
+        sugar=(0.9, 1.1),
+        sodium=(0, 10000),
+        saturated_fat=(0, 10000),
+        total_fat=(0, 10000),
+        carbs=(0, 10000),
+        protein=(0, 10000),
+        top_n=11,
     )
     end = time.time()
     print("Recommended Recipes:")
     for rec in recs:
         print(rec)
-    print("Search time: ", end-start)
+    print("Search time: ", end - start)
 
+    # Test on "pumpkin" with "cashew" allergies
     start = time.time()
     recs = model.recommend_recipes(
-        user_ingredients=['pumpkin'],
-        allergens=['cashew'],
-        top_n=11
+        user_ingredients=["pumpkin"], allergens=["cashew"], top_n=11
     )
     end = time.time()
     print("Recommended Recipes:")
     for rec in recs:
         print(rec)
-    print("Search time: ", end-start)
+    print("Search time: ", end - start)
