@@ -1,6 +1,7 @@
 import pandas as pd
 import numpy as np
 from typing import Tuple, List
+from rapidfuzz import process
 import faiss
 import ast
 
@@ -111,8 +112,14 @@ class faiss_model:
                 for ingredients in self.recipes_df["ingredient_names"]
             ]
         )
-        self.index = faiss.IndexFlatL2(self.vector_size)
-        self.index.add(self.vectors)
+        self.quantizer = faiss.IndexFlatIP(self.vector_size)
+        self.num_of_cells = 200
+        self.index = faiss.IndexIVFFlat(
+            self.quantizer, self.vector_size, self.num_of_cells
+        )
+        self.index.train(self.vectors)
+        ids = np.arange(self.vectors.shape[0])
+        self.index.add_with_ids(self.vectors, ids)
 
     def _encode_all_ingredients(self, ingredients: list) -> np.array:
         """
@@ -198,6 +205,19 @@ class faiss_model:
 
         return recipes_df[~mask]
 
+    # Filtering function
+    def _contains_allergen(
+        self, ingredients: List[str], allergens: List[str], threshold: int = 90
+    ) -> bool:
+        if not isinstance(ingredients, list):  # Ensure ingredients is a list
+            return False
+        else:
+            for ingredient in ingredients:
+                _, score, _ = process.extractOne(ingredient, allergens)
+                if score >= threshold:
+                    return True  # Filter out this row
+            return False  # Keep this row
+
     def recommend_recipes(
         self,
         user_ingredients: List[str],
@@ -230,7 +250,7 @@ class faiss_model:
         Returns:
         - list: A list of recommended recipes.
         """
-        # Assign min max values for nutritions
+        # Assign default min max values for nutritions
         nutrition_defaults = {
             "calories": (self.CALORIE_MIN, self.CALORIE_MAX),
             "total_fat": (self.TOTAL_FAT_MIN, self.TOTAL_FAT_MAX),
@@ -257,12 +277,20 @@ class faiss_model:
             if nutrition_constraints[nutrient] == (None, None):
                 nutrition_constraints[nutrient] = default
 
-        # FILTER: Filter out index of filtered recipes
+        # # FILTER: Filter out index of filtered recipes
+        # filtered_recipes = self.recipes_df[
+        #     ~self.recipes_df["ingredient_names"].apply(
+        #         lambda ingredients: any(item in allergens for item in ingredients)
+        #     )
+        # ]
+
+        # Apply filtering
         filtered_recipes = self.recipes_df[
             ~self.recipes_df["ingredient_names"].apply(
-                lambda ingredients: any(item in allergens for item in ingredients)
+                lambda x: self._contains_allergen(x, allergens)
             )
         ]
+
         filtered_recipes = self._nutrition_filter(
             filtered_recipes,
             nutrition_constraints["calories"],
@@ -279,7 +307,9 @@ class faiss_model:
         # SEARCH
         user_vector = self._encode_user_ingredients(user_ingredients).reshape(1, -1)
         _, filtered_indices = self.index.search(
-            user_vector, k=top_n, params=faiss.SearchParameters(sel=id_selector)
+            user_vector,
+            k=top_n,
+            params=faiss.SearchParametersIVF(sel=id_selector, nprobe=20),
         )
         return self.recipes_df.iloc[filtered_indices[0]]["name"].tolist()
 
@@ -312,7 +342,7 @@ if __name__ == "__main__":
             "cinnamon stick",
             "green cardamom pod",
         ],
-        allergens=["goat cheese"],
+        allergens=["goat cheese", "peanut"],
         calories=(202.5, 247.5),
         sugar=(0.9, 1.1),
         sodium=(0, 10000),
