@@ -1,34 +1,31 @@
+"""Module for natural language parsing of nutritional constraints, allergens, diets,
+and ingredients from user input.
+"""
+
 import re
 import json
+import ast
 from typing import Dict, Tuple, List, Any
 
-# from models.dev.faiss_rec import faiss_model
-# import pandas as pd, ast
+import pandas as pd
+import numpy as np
+import torch
+from sentence_transformers import SentenceTransformer, util
+from fuzzywuzzy import fuzz
 
 
 class NLSParser:
-    """
-    Optimized Natural Language Synthesis (NLS) module for extracting:
-      - Nutritional constraints (calories, fat, sugar, sodium, protein, etc.)
-      - Allergens (list of allergens based on ontology)
-      - Required ingredients (list of requested ingredients)
-      - Dietary preferences (vegetarian, vegan, etc. from ontology)
-    """
+    """Natural Language Synthesis (NLS) module for extracting parameters from user input.
 
-    # Recommended Daily Values (for reference)
-    RECOMMENDED_DV = {
-        "total_fat": 80,
-        "sugar": 50,
-        "sodium": 2300,
-        "protein": 50,
-        "saturated_fat": 20,
-        "carbs": 275,
-    }
+    This class extracts nutritional constraints (e.g. calories, fat, sugar), allergens,
+    requested ingredients, and dietary preferences from raw text.
+    """
 
     # Map keywords found in text to our nutritional attributes.
+
     NUTRITION_KEYWORDS = {
         "calories": "calories",
-        "fat": "total_fat",  # Note: We assume “fat” in the text means total fat.
+        "fat": "total_fat",
         "sugar": "sugar",
         "sodium": "sodium",
         "protein": "protein",
@@ -36,75 +33,206 @@ class NLSParser:
         "carbs": "carbs",
     }
 
-    def __init__(self, allergen_path: str, diet_path: str):
-        """
-        Initializes the parser by loading allergen and diet ontologies.
+    RECOMMENDED_DV = json.load(open("assets/nutrition_vals.json"))
+
+    def __init__(
+        self,
+        allergen_path: str,
+        diet_path: str,
+        ingr_path: str,
+        ingr_similarity_threshold: float,
+        ingr_model_name: str,
+    ):
+        """Initializes the parser by loading allergen and diet ontologies and ingredient data.
 
         Args:
-            allergen_path (str): Path to allergens JSON ontology.
-            diet_path (str): Path to diets JSON ontology.
+            allergen_path: Path to allergens JSON ontology.
+            diet_path: Path to diets JSON ontology.
+            ingr_path: Path to the CSV file containing ingredients.
+            ingr_similarity_threshold: Minimum cosine similarity to consider a match.
+            ingr_model_name: Name of the pretrained SentenceTransformer model.
         """
         self.allergen_ontology = self._load_ontology(allergen_path)
         self.diet_ontology = self._load_ontology(diet_path)
+        self.ingr_df = pd.read_csv(ingr_path)
 
-        # Flatten synonyms for quick lookup
+        # Normalize and prepare ingredient names and embeddings.
+        self.ingr_df["ingredient_names"] = (
+            self.ingr_df["ingredient_names"].str.strip().str.lower()
+        )
+        self.ingredients = self.ingr_df["ingredient_names"].tolist()
+        self.ingr_ids = self.ingr_df["ingredient_ids"].tolist()
+        self.ingr_similarity_threshold = ingr_similarity_threshold
+        self.ingr_rec_model = SentenceTransformer(ingr_model_name)
+        self.ingr_embeddings = self.ingr_rec_model.encode(
+            self.ingredients, convert_to_tensor=True
+        )
+
+        # Flatten synonyms for quick lookup.
         self.allergen_synonyms = self._flatten_ontology(self.allergen_ontology)
         self.diet_synonyms = self._flatten_ontology(self.diet_ontology)
 
     def parse_input(self, user_text: str) -> Dict[str, Any]:
-        """
-        Extracts nutritional constraints, allergens, dietary preferences, and ingredients from user input.
+        """Extracts nutritional constraints, allergens, dietary preferences, and ingredients.
 
         Args:
-            user_text (str): The raw text input from the user.
+            user_text: Raw text input from the user.
 
         Returns:
-            Dict[str, Any]: Extracted features, e.g.:
-                {
-                    "nutrition": {"total_fat": (min, max), "sugar": (min, max), ...},
-                    "allergen": ["peanut", "egg"],
-                    "diet": ["vegetarian"],
-                    "ingredients": ["chicken", "garlic"]
-                }
+            A dictionary with keys:
+              - nutrition: dict mapping nutritional attributes to (min, max) ranges.
+              - allergen: list of detected allergen categories.
+              - diet: list of detected dietary preferences.
+              - ingredients: list of recognized ingredient names (excluding allergens).
         """
+        # Convert text to lowercase for consistent matching.
         user_text = user_text.lower()
 
         nutrition_constraints = self._extract_nutrition_constraints(user_text)
-        detected_allergens = self._detect_categories(user_text, self.allergen_synonyms)
+        detected_allergens = self._detect_allergens(user_text, self.allergen_synonyms)
+        # Recognize ingredients and immediately filter out any that match a detected allergen.
+        recognized_ingredients = self._recognize_ingr(user_text, detected_allergens)
         detected_diets = self._detect_categories(user_text, self.diet_synonyms)
-        ingredients = self._extract_ingredients(
-            user_text, detected_allergens, detected_diets, nutrition_constraints
-        )
 
         return {
             "nutrition": nutrition_constraints,
             "allergen": detected_allergens,
             "diet": detected_diets,
-            "ingredients": ingredients,
+            "ingredients": recognized_ingredients,
         }
 
-    def _load_ontology(self, path: str) -> Dict[str, List[str]]:
-        """
-        Loads an ontology from a JSON file.
+    def _detect_allergens(self, text: str, allergen_dict: Dict[str, str]) -> List[str]:
+        """Detects allergens only if an allergen trigger word is present in the sentence.
 
-        Expected JSON format:
+        The text is split into sentences, and a sentence is considered if it contains a
+        trigger word starting with 'allerg' (e.g., "allergic", "allergy"). Within such a
+        sentence, the method searches for any allergen synonyms from the ontology.
+
+        Args:
+            text: Input text.
+            allergen_dict: Dictionary mapping allergen synonyms to canonical allergen names.
+
+        Returns:
+            A list of detected allergen categories.
+        """
+        detected_allergens = set()
+        # Split text into sentences using punctuation as delimiters.
+        sentences = re.split(r"[.!?]+", text)
+        allerg_trigger = re.compile(r"\ballerg\w*\b")
+        for sentence in sentences:
+            if allerg_trigger.search(sentence):
+                for synonym, category in allergen_dict.items():
+                    pattern = r"\b" + re.escape(synonym) + r"\b"
+                    if re.search(pattern, sentence):
+                        detected_allergens.add(category)
+        return list(detected_allergens)
+
+    def _matches_allergen_fuzzy(
+        self, allergen: str, ingredient: str, threshold: int = 80
+    ) -> bool:
+        """Performs a fuzzy match between an ingredient and each synonym for a given allergen.
+
+        Args:
+            allergen: The canonical allergen category (e.g. "egg").
+            ingredient: The recognized ingredient name.
+            threshold: The fuzzy matching score threshold (default is 80).
+
+        Returns:
+            True if the fuzzy matching score for any synonym meets or exceeds the threshold;
+            otherwise False.
+        """
+        synonyms = self.allergen_ontology.get(allergen, [])
+        for synonym in synonyms:
+            # Use token_set_ratio for a robust fuzzy match between the ingredient and allergen synonym.
+            score = fuzz.token_set_ratio(ingredient, synonym)
+            if score >= threshold:
+                return True
+        return False
+
+    def _detect_categories(self, text: str, category_dict: Dict[str, str]) -> List[str]:
+        """Detects categories (such as dietary preferences) using the provided ontology mapping.
+
+        Args:
+            text: Input text.
+            category_dict: Dictionary mapping synonyms to canonical categories.
+
+        Returns:
+            A list of detected categories.
+        """
+        detected = set()
+        for word in text.split():
+            if word in category_dict:
+                detected.add(category_dict[word])
+        return list(detected)
+
+    def _recognize_ingr(
+        self, user_text: str, detected_allergens: List[str]
+    ) -> List[str]:
+        """Recognizes ingredient names in the input text based on semantic similarity,
+        and immediately excludes any candidate that fuzzily matches any synonym for a
+        detected allergen.
+
+        Candidate phrases (both unigrams and simple bigrams) are compared against the
+        canonical ingredient names using SentenceTransformer embeddings.
+
+        Args:
+            user_text: Raw text input from the user.
+            detected_allergens: List of allergen categories detected from the text.
+
+        Returns:
+            A list of recognized ingredient names that do not fuzzy-match any detected allergen.
+        """
+        tokens = user_text.split()
+        candidates = set(tokens)
+
+        # Add simple bi-grams to capture multi-word ingredients.
+        if len(tokens) >= 2:
+            for i in range(len(tokens) - 1):
+                candidates.add(tokens[i] + " " + tokens[i + 1])
+
+        recognized = set()
+        for candidate in candidates:
+            candidate_embedding = self.ingr_rec_model.encode(
+                candidate, convert_to_tensor=True
+            )
+            cosine_scores = util.cos_sim(candidate_embedding, self.ingr_embeddings)[0]
+            max_score, max_idx = torch.max(cosine_scores, dim=0)
+            if max_score.item() >= self.ingr_similarity_threshold:
+                recognized_candidate = self.ingredients[max_idx]
+                # Exclude the recognized candidate if it fuzzily matches any synonym for any detected allergen.
+                if not any(
+                    self._matches_allergen_fuzzy(allergen, recognized_candidate)
+                    for allergen in detected_allergens
+                ):
+                    recognized.add(recognized_candidate)
+        return list(recognized)
+
+    def _load_ontology(self, path: str) -> Dict[str, List[str]]:
+        """Loads an ontology from a JSON file.
+
+        The expected JSON format is:
             {
                 "category_name": ["synonym1", "synonym2", ...],
                 ...
             }
 
+        Args:
+            path: Path to the JSON file.
+
         Returns:
-            Dict[str, List[str]]: Loaded ontology.
+            The loaded ontology dictionary.
         """
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
+        with open(path, "r", encoding="utf-8") as file:
+            return json.load(file)
 
     def _flatten_ontology(self, ontology: Dict[str, List[str]]) -> Dict[str, str]:
-        """
-        Converts an ontology into a flat dictionary for fast lookup.
+        """Flattens an ontology dictionary for fast lookup.
+
+        Args:
+            ontology: Ontology dictionary mapping categories to a list of synonyms.
 
         Returns:
-            Dict[str, str]: {synonym: category}
+            A dictionary mapping each synonym to its canonical category.
         """
         return {
             syn.lower(): category
@@ -115,17 +243,19 @@ class NLSParser:
     def _extract_nutrition_constraints(
         self, text: str
     ) -> Dict[str, Tuple[float, float]]:
-        """
-        Extracts numeric nutritional constraints from text.
+        """Extracts numeric nutritional constraints from the input text.
 
-        For 'calories', we use a ±10% range; for all other fields, a ±50% range.
+        For 'calories', a ±10% range is used; for all other attributes, a ±50% range is applied.
+
+        Args:
+            text: Input text.
 
         Returns:
-            Dict[str, Tuple[float, float]]: A mapping from each nutritional attribute to its (min, max) range.
+            A dictionary mapping each nutritional attribute to its (min, max) range.
         """
         constraints = {}
         for keyword, attr in self.NUTRITION_KEYWORDS.items():
-            match = re.search(rf"(\d+)\s*{keyword}", text)
+            match = re.search(rf"(\d+)\s*{re.escape(keyword)}\b", text)
             if match:
                 value = float(match.group(1))
                 if attr == "calories":
@@ -135,66 +265,30 @@ class NLSParser:
                 constraints[attr] = (min_val, max_val)
         return constraints
 
-    def _detect_categories(self, text: str, category_dict: Dict[str, str]) -> List[str]:
-        """
-        Detects allergens or diets from text using the provided ontology mapping.
-
-        Returns:
-            List[str]: List of detected categories.
-        """
-        detected = set()
-        for word in text.split():
-            if word in category_dict:
-                detected.add(category_dict[word])
-        return list(detected)
-
-    def _extract_ingredients(
-        self,
-        text: str,
-        allergens: List[str],
-        diets: List[str],
-        nutrition: Dict[str, Any],
-    ) -> List[str]:
-        """
-        Extracts ingredients while excluding words that are nutrition keywords, allergens, or diet terms.
-
-        Returns:
-            List[str]: Extracted ingredient names.
-        """
-        words = re.findall(r"\b[a-zA-Z]+\b", text)
-        excluded_words = (
-            set(self.NUTRITION_KEYWORDS.keys()) | set(allergens) | set(diets)
-        )
-        return [word for word in words if word not in excluded_words]
-
     def extract_faiss_features(self, user_text: str) -> Dict[str, Any]:
-        """
-        Processes the user input and returns a dictionary that meets the FAISS model’s type contract.
+        """Processes user input and returns a dictionary matching the FAISS model contract.
 
-        The returned dictionary has the following keys:
-            - nutrition: list of ingredients (to be used as the query vector)
-            - allergen: list of ingredients to filter out recipes
-            - calories, total_fat, sugar, sodium, protein, saturated_fat, carbs:
-                tuples (min, max) representing nutritional constraints.
-                If a constraint is not specified in the input, a default range of (0, 10000) is used.
+        The returned dictionary contains the following keys:
+          - nutrition: List of recognized ingredients (to be used as the query vector).
+          - allergen: List of allergens to filter out recipes.
+          - calories, total_fat, sugar, sodium, protein, saturated_fat, carbs:
+              Nutritional constraints as (min, max) tuples.
+              If a constraint is not specified, a default range of (0, 10000) is used.
 
         Args:
-            user_text (str): Raw text input from the user.
+            user_text: Raw text input from the user.
 
         Returns:
-            Dict[str, Any]: Dictionary with keys and types per the FAISS model contract.
+            A dictionary with keys and value types as expected by the FAISS model.
         """
         parsed = self.parse_input(user_text)
         nutrition_constraints = parsed.get("nutrition", {})
 
-        # For each nutritional field expected by the FAISS model, provide the parsed range or a default.
         def get_range(key: str) -> Tuple[float, float]:
             return nutrition_constraints.get(key, (0, 10000))
 
         features = {
-            "nutrition": parsed.get(
-                "ingredients", []
-            ),  # List of ingredients for one-hot encoding.
+            "nutrition": parsed.get("ingredients", []),
             "allergen": parsed.get("allergen", []),
             "calories": get_range("calories"),
             "total_fat": get_range("total_fat"),
@@ -211,32 +305,37 @@ class NLSParser:
 # Example Usage of the NLU Engine
 # -------------------------------
 if __name__ == "__main__":
-    # Paths to your ontology files (ensure these exist and follow the expected JSON format)
+    # Paths to ontology and ingredient files (ensure these exist and follow the expected format)
     allergen_path = "assets/allergens.json"
     diet_path = "assets/diets.json"
+    ingr_path = "assets/ingredient_map.csv"
 
-    nls_parser = NLSParser(allergen_path, diet_path)
-
-    # Example user query
-    user_query = (
-        "I want a high-protein vegan meal with tofu and spinach, "
-        "but no peanuts or dairy. Max 500 calories."
+    # Example user input.
+    user_input = (
+        "I love peanuts and chicken, but I'm allergic to eggs. "
+        "Also, add some garlic to my meal."
     )
 
-    # Extract features that satisfy the FAISS model contract.
-    faiss_features = nls_parser.extract_faiss_features(user_query)
+    nls_parser = NLSParser(
+        allergen_path,
+        diet_path,
+        ingr_path,
+        ingr_similarity_threshold=0.8,
+        ingr_model_name="paraphrase-MiniLM-L6-v2",
+    )
+
+    # Extract features conforming to the FAISS model contract.
+    faiss_features = nls_parser.extract_faiss_features(user_input)
     print("Extracted NLU Features:")
     for key, value in faiss_features.items():
         print(f"{key}: {value}")
 
-    # Example integration with the FAISS model:
-
-    # # Load your recipes dataframe (example with simple_recipes.csv)
+    # Example integration with the FAISS model (commented out):
+    #
     # simple_recipes = pd.read_csv("data/simple_recipes.csv")
-    # simple_recipes["ingredient_names"] = simple_recipes["ingredient_names"].apply(
-    #     ast.literal_eval
-    # )
-
+    # simple_recipes["ingredient_names"] = simple_recipes["ingredient_names"].apply(ast.literal_eval)
+    #
+    # from models.dev.faiss_rec import faiss_model
     # model = faiss_model(simple_recipes)
     # recommendations = model.recommend_recipes(
     #     user_ingredients=faiss_features["nutrition"],
@@ -250,7 +349,7 @@ if __name__ == "__main__":
     #     carbs=faiss_features["carbs"],
     #     top_n=5,
     # )
-
+    #
     # print("Recommended Recipes:")
     # for rec in recommendations:
     #     print(rec)

@@ -15,5 +15,5 @@
   "gluten": ["wheat", "barley", "rye", "oats", "flour", "bread", "pasta"],
   "soy": ["soybean", "tofu", "edamame", "miso"],
   "shellfish": ["shrimp", "crab", "lobster", "prawn", "crayfish"],
-  "eggs": ["egg", "egg white", "mayonnaise"]
+  "eggs": ["egg", "eggs", "egg white", "mayonnaise"]
 }
