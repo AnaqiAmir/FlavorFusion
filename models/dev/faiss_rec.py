@@ -1,9 +1,13 @@
 import pandas as pd
 import numpy as np
-from typing import Tuple, List
-from rapidfuzz import process
-import faiss
 import ast
+import time
+import torch
+from typing import Tuple, List
+
+import faiss
+from rapidfuzz import process
+from sentence_transformers import SentenceTransformer
 
 
 class faiss_model:
@@ -19,7 +23,7 @@ class faiss_model:
         unique_ingredients (list): A sorted list of all unique ingredients across all recipes.
         ingredient_to_idx (dict): A mapping of ingredients to their unique integer indices.
         vector_size (int): The size of the vectors, equal to the number of unique ingredients.
-        index (faiss.IndexFlatL2): The FAISS index used for nearest-neighbor search.
+        index (faiss.IndexIVFFlat): The FAISS index used for nearest-neighbor search.
         vectors (np.ndarray): A matrix of encoded ingredient vectors, where each row represents a recipe.
 
     Methods:
@@ -28,11 +32,11 @@ class faiss_model:
             Initializes the FAISS model, extracts unique ingredients, builds a mapping of ingredients to indices,
             encodes the recipe ingredients into vectors, and builds the FAISS index.
 
-        encode_ingredients(ingredients, ingredient_to_idx, unique_ingredients):
-            Encodes a list of ingredients into a vector representation using one-hot encoding.
-
         nutrition_filter(recipes_df, calories, total_fat, sugar, sodium, protein, saturated_fat, carbs):
             Filters recipes based on user-specified nutritional constraints.
+
+        contains_allergen():
+            Returns a boolean indicating whether a recipe contains user-specified allergens based on a fuzzy search.
 
         recommend_recipes(user_ingredients, allergens=[''], calories=None, total_fat=None, sugar=None,
                           sodium=None, protein=None, saturated_fat=None, carbs=None, top_n=5):
@@ -48,7 +52,7 @@ class faiss_model:
 
         # Get recommendations based on user input
         user_ingredients = ['chicken', 'garlic', 'onion']
-        recommendations = model.recommend_recipes(user_ingredients, calories=500, top_n=5)
+        recommendations = model.recommend_recipes(user_ingredients, calories=(500,2000), top_n=5)
         print(recommendations)
     """
 
@@ -69,6 +73,12 @@ class faiss_model:
         Raises:
             ValueError: If the `ingredient_names` column is missing in the input DataFrame or is not iterable.
         """
+        # Number of voronoi cells to be initalized in IndexIVFFlat
+        NUM_OF_CELLS = 200
+
+        # Switch to GPU if available
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         # Get unique ingredients
         self.recipes_df = recipes_df.copy()
         self.unique_ingredients = sorted(
@@ -81,6 +91,11 @@ class faiss_model:
         self.ingredient_to_idx = {
             ingredient: idx for idx, ingredient in enumerate(self.unique_ingredients)
         }
+
+        # Get ingredient names as list
+        self.recipes_df["ingredient_list"] = self.recipes_df["ingredient_names"].apply(
+            ast.literal_eval
+        )
 
         # Find min max values of each nutrition
         self.CALORIE_MIN = self.recipes_df["calories (#)"].min()
@@ -104,57 +119,38 @@ class faiss_model:
         self.CARBS_MIN = self.recipes_df["carbs (g)"].min()
         self.CARBS_MAX = self.recipes_df["carbs (g)"].max()
 
-        # BUILD: Initialize index for FAISS
-        self.vector_size = len(self.unique_ingredients)
-        self.vectors = np.vstack(
-            [
-                self._encode_all_ingredients(ingredients)
-                for ingredients in self.recipes_df["ingredient_names"]
-            ]
+        # Prepare ingredients for encoding
+        self.recipes_df["ingredient_names"] = (
+            self.recipes_df["ingredient_names"].str.strip().str.lower()
         )
-        self.quantizer = faiss.IndexFlatIP(self.vector_size)
-        self.num_of_cells = 200
+        self.ingredients = self.recipes_df["ingredient_names"].tolist()
+        self.model = SentenceTransformer("paraphrase-MiniLM-L6-v2").to(self.device)
+
+        # Encode ingredients
+        start = time.perf_counter()
+        self.ingredient_embeddings = (
+            self.model.encode(self.ingredients, convert_to_tensor=True).cpu().numpy()
+        )
+        self.ingredient_embeddings = np.asarray(
+            self.ingredient_embeddings.astype("float32")
+        )
+        end = time.perf_counter()
+        print("Encoding time: ", end - start)
+
+        # Build FAISS IndexIVF
+        start = time.perf_counter()
+        self.vector_size = self.ingredient_embeddings.shape[1]  # embedding dim
+        self.quantizer = faiss.IndexFlatL2(self.vector_size)
+        self.num_of_cells = NUM_OF_CELLS  # num of voronoi cells
         self.index = faiss.IndexIVFFlat(
             self.quantizer, self.vector_size, self.num_of_cells
         )
-        self.index.train(self.vectors)
-        ids = np.arange(self.vectors.shape[0])
-        self.index.add_with_ids(self.vectors, ids)
-
-    def _encode_all_ingredients(self, ingredients: list) -> np.array:
-        """
-        Generate vector encodings for ingredients-to-recipes.
-
-        Args:
-        - ingredients (list): A list of ingredients in the recipe.
-        - ingredient_to_idx (dict): A dict mapping ingredients to their respective ids.
-        - unique_ingredients (list): A list of unique ingredients.
-
-        Returns:
-        - vector (np.array): An encoding of which ingredients are in the recipe w.r.t to all available ingredients.
-        """
-        vector = np.zeros(len(self.unique_ingredients), dtype="float32")
-        for ingredient in ingredients:
-            vector[self.ingredient_to_idx[ingredient]] = 1.0
-        return vector
-
-    def _encode_user_ingredients(self, ingredients: list) -> np.array:
-        """
-        Generate vector encodings for ingredients-to-recipes.
-
-        Args:
-        - ingredients (list): A list of ingredients in the recipe.
-        - ingredient_to_idx (dict): A dict mapping ingredients to their respective ids.
-        - unique_ingredients (list): A list of unique ingredients.
-
-        Returns:
-        - vector (np.array): An encoding of which ingredients are in the recipe w.r.t to all available ingredients.
-        """
-        vector = np.zeros(len(self.unique_ingredients), dtype="float32")
-        for ingredient in ingredients:
-            if ingredient in self.unique_ingredients:
-                vector[self.ingredient_to_idx[ingredient]] = 1.0
-        return vector
+        self.index.train(self.ingredient_embeddings)
+        self.ids = np.array(range(0, self.ingredient_embeddings.shape[0]))
+        self.ids = np.asarray(self.ids.astype("int64"))
+        self.index.add_with_ids(self.ingredient_embeddings, self.ids)
+        end = time.perf_counter()
+        print("Build time: ", end - start)
 
     def _nutrition_filter(
         self,
@@ -209,6 +205,17 @@ class faiss_model:
     def _contains_allergen(
         self, ingredients: List[str], allergens: List[str], threshold: int = 90
     ) -> bool:
+        """
+        Returns a boolean indicating whether a recipe contains user-specified allergens based on a fuzzy search.
+
+        Args:
+        - ingredients (List[str]): A list of all present ingredients in a recipe.
+        - allergens (List[str]): A list of user-specified allergens.
+        - threshold (int): The similarity score of a single ingredient compared to a list of allergens.
+
+        Returns:
+        - bool: The return value. True if recipe contains an allergen, False otherwise.
+        """
         if not isinstance(ingredients, list):  # Ensure ingredients is a list
             return False
         else:
@@ -221,7 +228,7 @@ class faiss_model:
     def recommend_recipes(
         self,
         user_ingredients: List[str],
-        allergens: List[str] = [""],
+        allergens: List[str] = None,
         calories: Tuple[float, float] = (None, None),
         total_fat: Tuple[float, float] = (None, None),
         sugar: Tuple[float, float] = (None, None),
@@ -277,20 +284,17 @@ class faiss_model:
             if nutrition_constraints[nutrient] == (None, None):
                 nutrition_constraints[nutrient] = default
 
-        # # FILTER: Filter out index of filtered recipes
-        # filtered_recipes = self.recipes_df[
-        #     ~self.recipes_df["ingredient_names"].apply(
-        #         lambda ingredients: any(item in allergens for item in ingredients)
-        #     )
-        # ]
+        # Filter out recipes that contain allergens
+        if allergens is not None:
+            filtered_recipes = self.recipes_df[
+                ~self.recipes_df["ingredient_list"].apply(
+                    lambda x: self._contains_allergen(x, allergens)
+                )
+            ]
+        else:
+            filtered_recipes = self.recipes_df
 
-        # Apply filtering
-        filtered_recipes = self.recipes_df[
-            ~self.recipes_df["ingredient_names"].apply(
-                lambda x: self._contains_allergen(x, allergens)
-            )
-        ]
-
+        # Filter out recipes that are not within the specified nutrition range
         filtered_recipes = self._nutrition_filter(
             filtered_recipes,
             nutrition_constraints["calories"],
@@ -301,11 +305,15 @@ class faiss_model:
             nutrition_constraints["saturated_fat"],
             nutrition_constraints["carbs"],
         )
+
+        # Get ids of relevant recipes
         filtered_ids = filtered_recipes.index
         id_selector = faiss.IDSelectorBatch(filtered_ids)
 
         # SEARCH
-        user_vector = self._encode_user_ingredients(user_ingredients).reshape(1, -1)
+        user_vector = (
+            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+        )
         _, filtered_indices = self.index.search(
             user_vector,
             k=top_n,
@@ -319,21 +327,12 @@ class faiss_model:
 ###################
 
 if __name__ == "__main__":
-    import time
-
     # Load data
     simple_recipes = pd.read_csv("data/simple_recipes.csv")
-    simple_recipes["ingredient_names"] = simple_recipes["ingredient_names"].apply(
-        ast.literal_eval
-    )
 
     # Test on "aromatic basmati rice  rice cooker" ingredients
-    start = time.time()
     model = faiss_model(simple_recipes)
-    end = time.time()
-    print("Build time: ", end - start)
-
-    start = time.time()
+    start = time.perf_counter()
     recs = model.recommend_recipes(
         user_ingredients=[
             "basmati rice",
@@ -352,18 +351,18 @@ if __name__ == "__main__":
         protein=(0, 10000),
         top_n=11,
     )
-    end = time.time()
+    end = time.perf_counter()
     print("Recommended Recipes:")
     for rec in recs:
         print(rec)
     print("Search time: ", end - start)
 
     # Test on "pumpkin" with "cashew" allergies
-    start = time.time()
+    start = time.perf_counter()
     recs = model.recommend_recipes(
         user_ingredients=["pumpkin"], allergens=["cashew"], top_n=11
     )
-    end = time.time()
+    end = time.perf_counter()
     print("Recommended Recipes:")
     for rec in recs:
         print(rec)
