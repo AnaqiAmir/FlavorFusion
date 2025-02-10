@@ -1,11 +1,11 @@
-import pandas as pd
-import numpy as np
 import ast
 import time
-import torch
 from typing import Tuple, List
 
 import faiss
+import torch
+import pandas as pd
+import numpy as np
 from rapidfuzz import process
 from sentence_transformers import SentenceTransformer
 
@@ -56,7 +56,7 @@ class faiss_model:
         print(recommendations)
     """
 
-    def __init__(self, recipes_df: pd.DataFrame):
+    def __init__(self, recipes_df: pd.DataFrame, index_key: str):
         """
         Initializes the FAISS model with recipe data and builds the FAISS index.
 
@@ -73,8 +73,12 @@ class faiss_model:
         Raises:
             ValueError: If the `ingredient_names` column is missing in the input DataFrame or is not iterable.
         """
+        # Index key
+        self.index_key = index_key
+
         # Number of voronoi cells to be initalized in IndexIVFFlat
-        NUM_OF_CELLS = 200
+        if self.index_key == "IVF":
+            NUM_OF_CELLS = 200
 
         # Switch to GPU if available
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -135,22 +139,52 @@ class faiss_model:
             self.ingredient_embeddings.astype("float32")
         )
         end = time.perf_counter()
-        print("Encoding time: ", end - start)
+        self.encode_time = end - start
 
-        # Build FAISS IndexIVF
-        start = time.perf_counter()
-        self.vector_size = self.ingredient_embeddings.shape[1]  # embedding dim
-        self.quantizer = faiss.IndexFlatL2(self.vector_size)
-        self.num_of_cells = NUM_OF_CELLS  # num of voronoi cells
-        self.index = faiss.IndexIVFFlat(
-            self.quantizer, self.vector_size, self.num_of_cells
-        )
-        self.index.train(self.ingredient_embeddings)
-        self.ids = np.array(range(0, self.ingredient_embeddings.shape[0]))
-        self.ids = np.asarray(self.ids.astype("int64"))
-        self.index.add_with_ids(self.ingredient_embeddings, self.ids)
-        end = time.perf_counter()
-        print("Build time: ", end - start)
+        # Build FAISS IndexIVFFlat
+        if self.index_key == "IVF":
+            start = time.perf_counter()
+            self.vector_size = self.ingredient_embeddings.shape[1]  # embedding dim
+            self.quantizer = faiss.IndexFlatL2(self.vector_size)
+            self.num_of_cells = NUM_OF_CELLS  # num of voronoi cells
+            self.index = faiss.IndexIVFFlat(
+                self.quantizer, self.vector_size, self.num_of_cells
+            )
+            self.index.train(self.ingredient_embeddings)
+            self.ids = np.array(range(0, self.ingredient_embeddings.shape[0]))
+            self.ids = np.asarray(self.ids.astype("int64"))
+            self.index.add_with_ids(self.ingredient_embeddings, self.ids)
+            end = time.perf_counter()
+            self.build_time = end - start
+
+        # Build FAISS IndexFlatL2
+        elif self.index_key == "FlatL2":
+            start = time.perf_counter()
+            self.vector_size = self.ingredient_embeddings.shape[1]
+            self.index = faiss.IndexFlatL2(self.vector_size)
+            self.index.add(self.ingredient_embeddings)
+            end = time.perf_counter()
+            self.build_time = end - start
+
+        # Build FAISS IndexFlatIP
+        elif self.index_key == "FlatIP":
+            start = time.perf_counter()
+            self.vector_size = self.ingredient_embeddings.shape[1]
+            self.index = faiss.IndexFlatIP(self.vector_size)
+            self.index.add(self.ingredient_embeddings)
+            end = time.perf_counter()
+            self.build_time = end - start
+
+        else:
+            print(
+                'Invalid \'index\' parameter. Index must either be index = ("IndexFlatL2", "IndexFlatIP", "IndexIVFFLat")'
+            )
+
+    def get_encode_time(self):
+        return self.encode_time
+
+    def get_build_time(self):
+        return self.build_time
 
     def _nutrition_filter(
         self,
@@ -317,7 +351,11 @@ class faiss_model:
         _, filtered_indices = self.index.search(
             user_vector,
             k=top_n,
-            params=faiss.SearchParametersIVF(sel=id_selector, nprobe=20),
+            params=(
+                faiss.SearchParametersIVF(sel=id_selector, nprobe=10)
+                if self.index_key == "IVF"
+                else faiss.SearchParameters(sel=id_selector)
+            ),
         )
         return self.recipes_df.iloc[filtered_indices[0]]["name"].tolist()
 
@@ -331,7 +369,7 @@ if __name__ == "__main__":
     simple_recipes = pd.read_csv("data/simple_recipes.csv")
 
     # Test on "aromatic basmati rice  rice cooker" ingredients
-    model = faiss_model(simple_recipes)
+    model = faiss_model(simple_recipes.head(1000), index="FlatIP")
     start = time.perf_counter()
     recs = model.recommend_recipes(
         user_ingredients=[
