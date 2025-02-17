@@ -96,6 +96,17 @@ class BaseFaissIndex:
     def _search_nearest_neighbors(
         self, id_selector: np.array, user_ingredients: List[str], top_n: int
     ):
+        """
+        Find the nearest top_n recipes based on user_ingredients within the scope of id_selector.
+
+        Args:
+        - id_select (np.array): An array of eligible recipes ids.
+        - user_ingredients (list): A list of ingredients provided by the user.
+        - top_n (int): The number of recommended recipes to return.
+
+        Returns:
+        - list: A list of recommended recipes.
+        """
         user_vector = (
             self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
         )
@@ -274,6 +285,7 @@ class IVFFlatIndex(BaseFaissIndex):
             else faiss.IndexFlatIP(self.vector_size)
         )
 
+        # Build Index
         self.index = faiss.IndexIVFFlat(
             self.quantizer, self.vector_size, self.num_of_cells
         )
@@ -381,5 +393,28 @@ class IVFPQIndex(BaseFaissIndex):
             user_vector,
             k=top_n,
             params=(faiss.SearchParametersIVF(sel=id_selector, nprobe=self.nprobe)),
+        )
+        return self.recipes_df.iloc[filtered_indices[0]]["name"].tolist()
+
+
+class HNSWIndex(BaseFaissIndex):
+    def __init__(self, recipes_df: pd.DataFrame, m: int = 8):
+        super().__init__(recipes_df)
+        self.m = m
+        start = time.perf_counter()
+        self.vector_size = self.ingredient_embeddings.shape[1]
+        self.index = faiss.IndexHNSWFlat(self.vector_size, self.m)
+        self.index.add(self.ingredient_embeddings)
+        end = time.perf_counter()
+        self.build_time = end - start
+
+    def _search_nearest_neighbors(self, id_selector, user_ingredients, top_n):
+        user_vector = (
+            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+        )
+        _, filtered_indices = self.index.search(
+            user_vector,
+            k=top_n,
+            params=(faiss.SearchParametersHNSW(sel=id_selector)),
         )
         return self.recipes_df.iloc[filtered_indices[0]]["name"].tolist()

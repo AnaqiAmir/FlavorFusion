@@ -20,7 +20,7 @@ class RecipeEmbeddings:
             ast.literal_eval
         )
 
-        # Prepare ingredients for encoding
+        # Prepare ingredients for embedding
         self.recipes_df["ingredient_names"] = (
             self.recipes_df["ingredient_names"].str.strip().str.lower()
         )
