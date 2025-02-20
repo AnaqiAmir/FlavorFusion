@@ -1,22 +1,25 @@
 import time
 from typing import Tuple, List
+import json
 
 import faiss
 import pandas as pd
 import numpy as np
 from rapidfuzz import fuzz
+from sentence_transformers import SentenceTransformer
+from io import StringIO
 
 from recipe_embeddings import RecipeEmbeddings
 
 
 class BaseFaissIndex:
     def __init__(self, recipes_df: pd.DataFrame):
-        embedding_model = RecipeEmbeddings(recipes_df)
-        self.recipes_df = embedding_model.get_recipes_df()
-        self.ingredient_embeddings = embedding_model.get_ingredient_embeddings()
-        self.nutrition_min_max = embedding_model.get_nutrition_min_max()
-        self.model = embedding_model.get_model()
-
+        recipe_embedding_model = RecipeEmbeddings(recipes_df)
+        self.recipes_df = recipe_embedding_model.get_recipes_df()
+        self.ingredient_embeddings = recipe_embedding_model.get_ingredient_embeddings()
+        self.nutrition_min_max = recipe_embedding_model.get_nutrition_min_max()
+        self.embedding_model = recipe_embedding_model.get_embedding_model()
+        self.embedding_time = recipe_embedding_model.get_embedding_time()
         self.index = None
         self.build_time = 0
 
@@ -108,7 +111,9 @@ class BaseFaissIndex:
         - list: A list of recommended recipes.
         """
         user_vector = (
-            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+            self.embedding_model.encode(user_ingredients, convert_to_tensor=True)
+            .cpu()
+            .numpy()
         )
         _, filtered_indices = self.index.search(
             user_vector,
@@ -231,6 +236,81 @@ class BaseFaissIndex:
     def get_build_time(self):
         return self.build_time
 
+    def save_index(self, index_file_path: str, metadata_file_path: str):
+        """
+        Save the FAISS index using FAISS's built-in serialization.
+        Optionally, also save additional metadata (including embeddings and model info) to a JSON file.
+        """
+        if self.index is None:
+            raise ValueError("FAISS index is not initialized or built.")
+
+        # Save the FAISS index
+        faiss.write_index(self.index, index_file_path)
+        print(f"FAISS index saved to {index_file_path}")
+
+        # Save metadata
+        metadata = {
+            "recipes_df": (
+                self.recipes_df.to_json(orient="split")
+                if self.recipes_df is not None
+                else None
+            ),
+            "nutrition_min_max": self.nutrition_min_max,
+            "build_time": self.build_time,
+            "embedding_time": getattr(self, "embedding_time", None),
+            "ingredient_embeddings": self.ingredient_embeddings.tolist(),
+            "model_name": "paraphrase-MiniLM-L6-v2",  # Save the identifier for reinitialization
+        }
+
+        # Save metadata into json file
+        with open(metadata_file_path, "w") as f:
+            json.dump(metadata, f)
+        print(f"Metadata saved to {metadata_file_path}")
+
+    @classmethod
+    def load_from_files(cls, index_file_path: str, metadata_file_path: str):
+        """
+        Create a new instance of BaseFaissIndex by loading the FAISS index (and optionally metadata)
+        from the given files. This bypasses the need for an initial dataset.
+        """
+        # Create an instance without calling __init__
+        instance = cls.__new__(cls)
+
+        # Load the FAISS index
+        instance.index = faiss.read_index(index_file_path)
+
+        # Load metadata
+        with open(metadata_file_path, "r") as f:
+            metadata = json.load(f)
+
+        # Recover the dataframe and other metadata
+        instance.recipes_df = (
+            pd.read_json(StringIO(metadata["recipes_df"]), orient="split")
+            if metadata["recipes_df"]
+            else None
+        )
+        instance.nutrition_min_max = metadata["nutrition_min_max"]
+        instance.build_time = metadata["build_time"]
+        instance.embedding_time = metadata.get("embedding_time", None)
+
+        # Convert ingredient embeddings back to a NumPy array
+        if metadata.get("ingredient_embeddings") is not None:
+            instance.ingredient_embeddings = np.array(
+                metadata["ingredient_embeddings"], dtype=np.float32
+            )
+        else:
+            instance.ingredient_embeddings = None
+
+        # Reinitialize the embedding model using the saved model name
+        model_name = metadata.get("model_name", "paraphrase-MiniLM-L6-v2")
+        instance.embedding_model = SentenceTransformer(model_name)
+
+        # Print successful loading statements
+        print(f"FAISS index loaded from {index_file_path}")
+        print(f"Metadata loaded from {metadata_file_path}")
+
+        return instance
+
 
 class FlatIndex(BaseFaissIndex):
     def __init__(self, recipes_df: pd.DataFrame, metric: str = "L2"):
@@ -300,7 +380,9 @@ class IVFFlatIndex(BaseFaissIndex):
         self, id_selector: np.array, user_ingredients: List[str], top_n: int
     ):
         user_vector = (
-            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+            self.embedding_model.encode(user_ingredients, convert_to_tensor=True)
+            .cpu()
+            .numpy()
         )
         _, filtered_indices = self.index.search(
             user_vector,
@@ -330,7 +412,9 @@ class PQIndex(BaseFaissIndex):
         self, id_selector: np.array, user_ingredients: List[str], top_n: int
     ):
         user_vector = (
-            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+            self.embedding_model.encode(user_ingredients, convert_to_tensor=True)
+            .cpu()
+            .numpy()
         )
         _, filtered_indices = self.index.search(
             user_vector,
@@ -387,7 +471,9 @@ class IVFPQIndex(BaseFaissIndex):
         self, id_selector: np.array, user_ingredients: List[str], top_n: int
     ):
         user_vector = (
-            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+            self.embedding_model.encode(user_ingredients, convert_to_tensor=True)
+            .cpu()
+            .numpy()
         )
         _, filtered_indices = self.index.search(
             user_vector,
@@ -410,7 +496,9 @@ class HNSWIndex(BaseFaissIndex):
 
     def _search_nearest_neighbors(self, id_selector, user_ingredients, top_n):
         user_vector = (
-            self.model.encode(user_ingredients, convert_to_tensor=True).cpu().numpy()
+            self.embedding_model.encode(user_ingredients, convert_to_tensor=True)
+            .cpu()
+            .numpy()
         )
         _, filtered_indices = self.index.search(
             user_vector,

@@ -24,7 +24,9 @@ class RecipeEmbeddings:
         self.recipes_df["ingredient_names"] = (
             self.recipes_df["ingredient_names"].str.strip().str.lower()
         )
-        self.model = SentenceTransformer("paraphrase-MiniLM-L6-v2").to(self.device)
+        self.embedding_model = SentenceTransformer("paraphrase-MiniLM-L6-v2").to(
+            self.device
+        )
 
         # Embed ingredients
         self.ingredient_embeddings, self.embedding_time = self._embed_ingredients()
@@ -32,7 +34,7 @@ class RecipeEmbeddings:
     def _embed_ingredients(self):
         start = time.perf_counter()
         ingredient_embeddings = (
-            self.model.encode(
+            self.embedding_model.encode(
                 self.recipes_df["ingredient_names"].tolist(), convert_to_tensor=True
             )
             .cpu()
@@ -46,8 +48,8 @@ class RecipeEmbeddings:
     def get_recipes_df(self):
         return self.recipes_df
 
-    def get_model(self):
-        return self.model
+    def get_embedding_model(self):
+        return self.embedding_model
 
     def get_ingredient_embeddings(self):
         return self.ingredient_embeddings
