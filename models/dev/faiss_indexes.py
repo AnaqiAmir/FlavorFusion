@@ -9,18 +9,37 @@ from rapidfuzz import fuzz
 from sentence_transformers import SentenceTransformer
 from io import StringIO
 
-from recipe_embeddings import RecipeEmbeddings
-
 
 class BaseFaissIndex:
-    def __init__(self, recipes_df: pd.DataFrame):
-        recipe_embedding_model = RecipeEmbeddings(recipes_df)
-        self.recipes_df = recipe_embedding_model.get_recipes_df()
-        self.ingredient_embeddings = recipe_embedding_model.get_ingredient_embeddings()
-        self.nutrition_min_max = recipe_embedding_model.get_nutrition_min_max()
-        self.embedding_model = recipe_embedding_model.get_embedding_model()
-        self.embedding_time = recipe_embedding_model.get_embedding_time()
-        self.index = None
+    def __init__(self, metadata_file_path: str, index_file_path: str = None):
+        # Load index (if applicable)
+        if index_file_path is not None:
+            self.index = faiss.read_index(index_file_path)
+
+        # Load metadata
+        with open(metadata_file_path, "r") as f:
+            metadata = json.load(f)
+
+        # Recover the dataframe
+        self.recipes_df = (
+            pd.read_json(StringIO(metadata["recipes_df"]), orient="split")
+            if metadata["recipes_df"]
+            else None
+        )
+
+        # Recover embedding time
+        self.embedding_time = metadata.get("embedding_time", None)
+
+        # Convert ingredient embeddings back to a NumPy array
+        self.ingredient_embeddings = np.array(
+            metadata["ingredient_embeddings"], dtype=np.float32
+        )
+
+        # Reinitialize the embedding model using the saved model name
+        model_name = metadata.get("embedding_model", "paraphrase-MiniLM-L6-v2")
+        self.embedding_model = SentenceTransformer(model_name)
+
+        # Initialize build time
         self.build_time = 0
 
     def _nutrition_filter(
@@ -154,35 +173,35 @@ class BaseFaissIndex:
         Returns:
         - list: A list of recommended recipes.
         """
-        # Assign default min max values for nutritions
+        # Assign default min/max values for nutrition directly from the dataframe
         nutrition_defaults = {
             "calories": (
-                self.nutrition_min_max["calorie_min"],
-                self.nutrition_min_max["calorie_max"],
+                self.recipes_df["calories (#)"].min(),
+                self.recipes_df["calories (#)"].max(),
             ),
             "total_fat": (
-                self.nutrition_min_max["total_fat_min"],
-                self.nutrition_min_max["total_fat_max"],
+                self.recipes_df["total_fat (g)"].min(),
+                self.recipes_df["total_fat (g)"].max(),
             ),
             "sugar": (
-                self.nutrition_min_max["sugar_min"],
-                self.nutrition_min_max["sugar_max"],
+                self.recipes_df["sugar (g)"].min(),
+                self.recipes_df["sugar (g)"].max(),
             ),
             "sodium": (
-                self.nutrition_min_max["sodium_min"],
-                self.nutrition_min_max["sodium_max"],
+                self.recipes_df["sodium (mg)"].min(),
+                self.recipes_df["sodium (mg)"].max(),
             ),
             "protein": (
-                self.nutrition_min_max["protein_min"],
-                self.nutrition_min_max["protein_max"],
+                self.recipes_df["protein (g)"].min(),
+                self.recipes_df["protein (g)"].max(),
             ),
             "saturated_fat": (
-                self.nutrition_min_max["saturated_fat_min"],
-                self.nutrition_min_max["saturated_fat_max"],
+                self.recipes_df["saturated_fat (g)"].min(),
+                self.recipes_df["saturated_fat (g)"].max(),
             ),
             "carbs": (
-                self.nutrition_min_max["carbs_min"],
-                self.nutrition_min_max["carbs_max"],
+                self.recipes_df["carbs (g)"].min(),
+                self.recipes_df["carbs (g)"].max(),
             ),
         }
 
@@ -236,7 +255,7 @@ class BaseFaissIndex:
     def get_build_time(self):
         return self.build_time
 
-    def save_index(self, index_file_path: str, metadata_file_path: str):
+    def save_index(self, index_file_path: str):
         """
         Save the FAISS index using FAISS's built-in serialization.
         Optionally, also save additional metadata (including embeddings and model info) to a JSON file.
@@ -248,73 +267,12 @@ class BaseFaissIndex:
         faiss.write_index(self.index, index_file_path)
         print(f"FAISS index saved to {index_file_path}")
 
-        # Save metadata
-        metadata = {
-            "recipes_df": (
-                self.recipes_df.to_json(orient="split")
-                if self.recipes_df is not None
-                else None
-            ),
-            "nutrition_min_max": self.nutrition_min_max,
-            "build_time": self.build_time,
-            "embedding_time": getattr(self, "embedding_time", None),
-            "ingredient_embeddings": self.ingredient_embeddings.tolist(),
-            "model_name": "paraphrase-MiniLM-L6-v2",  # Save the identifier for reinitialization
-        }
-
-        # Save metadata into json file
-        with open(metadata_file_path, "w") as f:
-            json.dump(metadata, f)
-        print(f"Metadata saved to {metadata_file_path}")
-
-    @classmethod
-    def load_from_files(cls, index_file_path: str, metadata_file_path: str):
-        """
-        Create a new instance of BaseFaissIndex by loading the FAISS index (and optionally metadata)
-        from the given files. This bypasses the need for an initial dataset.
-        """
-        # Create an instance without calling __init__
-        instance = cls.__new__(cls)
-
-        # Load the FAISS index
-        instance.index = faiss.read_index(index_file_path)
-
-        # Load metadata
-        with open(metadata_file_path, "r") as f:
-            metadata = json.load(f)
-
-        # Recover the dataframe and other metadata
-        instance.recipes_df = (
-            pd.read_json(StringIO(metadata["recipes_df"]), orient="split")
-            if metadata["recipes_df"]
-            else None
-        )
-        instance.nutrition_min_max = metadata["nutrition_min_max"]
-        instance.build_time = metadata["build_time"]
-        instance.embedding_time = metadata.get("embedding_time", None)
-
-        # Convert ingredient embeddings back to a NumPy array
-        if metadata.get("ingredient_embeddings") is not None:
-            instance.ingredient_embeddings = np.array(
-                metadata["ingredient_embeddings"], dtype=np.float32
-            )
-        else:
-            instance.ingredient_embeddings = None
-
-        # Reinitialize the embedding model using the saved model name
-        model_name = metadata.get("model_name", "paraphrase-MiniLM-L6-v2")
-        instance.embedding_model = SentenceTransformer(model_name)
-
-        # Print successful loading statements
-        print(f"FAISS index loaded from {index_file_path}")
-        print(f"Metadata loaded from {metadata_file_path}")
-
-        return instance
-
 
 class FlatIndex(BaseFaissIndex):
-    def __init__(self, recipes_df: pd.DataFrame, metric: str = "L2"):
-        super().__init__(recipes_df)
+    def __init__(
+        self, metadata_file_path: str, index_file_path: str = None, metric: str = "L2"
+    ):
+        super().__init__(metadata_file_path, index_file_path)
         start = time.perf_counter()
         self.vector_size = self.ingredient_embeddings.shape[1]
 
@@ -340,12 +298,13 @@ class FlatIndex(BaseFaissIndex):
 class IVFFlatIndex(BaseFaissIndex):
     def __init__(
         self,
-        recipes_df: pd.DataFrame,
+        metadata_file_path: str,
         num_of_cells: str,
         nprobe: int,
+        index_file_path: str = None,
         metric: str = "L2",
     ):
-        super().__init__(recipes_df)
+        super().__init__(metadata_file_path, index_file_path)
         self.num_of_cells = num_of_cells  # num of voronoi cells
         self.nprobe = nprobe
         start = time.perf_counter()
@@ -393,8 +352,14 @@ class IVFFlatIndex(BaseFaissIndex):
 
 
 class PQIndex(BaseFaissIndex):
-    def __init__(self, recipes_df, m: int = 8, nbits: int = 8):
-        super().__init__(recipes_df)
+    def __init__(
+        self,
+        metadata_file_path: str,
+        index_file_path: str = None,
+        m: int = 8,
+        nbits: int = 8,
+    ):
+        super().__init__(metadata_file_path, index_file_path)
         self.m = m
         self.nbits = nbits
         start = time.perf_counter()
@@ -427,14 +392,15 @@ class PQIndex(BaseFaissIndex):
 class IVFPQIndex(BaseFaissIndex):
     def __init__(
         self,
-        recipes_df: pd.DataFrame,
+        metadata_file_path: str,
         num_of_cells: str,
         nprobe: int,
+        index_file_path: str = None,
         m: int = 8,
         nbits: int = 8,
         metric: str = "L2",
     ):
-        super().__init__(recipes_df)
+        super().__init__(metadata_file_path, index_file_path)
         self.num_of_cells = num_of_cells  # num of voronoi cells
         self.nprobe = nprobe
         self.m = m
@@ -484,8 +450,10 @@ class IVFPQIndex(BaseFaissIndex):
 
 
 class HNSWIndex(BaseFaissIndex):
-    def __init__(self, recipes_df: pd.DataFrame, m: int = 8):
-        super().__init__(recipes_df)
+    def __init__(
+        self, metadata_file_path: str, index_file_path: str = None, m: int = 8
+    ):
+        super().__init__(metadata_file_path, index_file_path)
         self.m = m
         start = time.perf_counter()
         self.vector_size = self.ingredient_embeddings.shape[1]

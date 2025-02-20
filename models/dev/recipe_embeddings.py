@@ -1,5 +1,6 @@
 import ast
 import time
+import json
 
 import torch
 import pandas as pd
@@ -54,24 +55,26 @@ class RecipeEmbeddings:
     def get_ingredient_embeddings(self):
         return self.ingredient_embeddings
 
-    def get_nutrition_min_max(self):
-        nutrition_min_max = {
-            "calorie_min": self.recipes_df["calories (#)"].min(),
-            "calorie_max": self.recipes_df["calories (#)"].max(),
-            "total_fat_min": self.recipes_df["total_fat (g)"].min(),
-            "total_fat_max": self.recipes_df["total_fat (g)"].max(),
-            "sugar_min": self.recipes_df["sugar (g)"].min(),
-            "sugar_max": self.recipes_df["sugar (g)"].max(),
-            "sodium_min": self.recipes_df["sodium (mg)"].min(),
-            "sodium_max": self.recipes_df["sodium (mg)"].max(),
-            "protein_min": self.recipes_df["protein (g)"].min(),
-            "protein_max": self.recipes_df["protein (g)"].max(),
-            "saturated_fat_min": self.recipes_df["saturated_fat (g)"].min(),
-            "saturated_fat_max": self.recipes_df["saturated_fat (g)"].max(),
-            "carbs_min": self.recipes_df["carbs (g)"].min(),
-            "carbs_max": self.recipes_df["carbs (g)"].max(),
-        }
-        return nutrition_min_max
-
     def get_embedding_time(self):
         return self.embedding_time
+
+    def save_embeddings(self, file_path: str):
+        """
+        Save the dataframe, embedding model, ingredient embeddings, and embedding time to a JSON file.
+        """
+        # Save metadata
+        metadata = {
+            "recipes_df": (
+                self.recipes_df.to_json(orient="split")
+                if self.recipes_df is not None
+                else None
+            ),
+            "embedding_model": "paraphrase-MiniLM-L6-v2",  # Save the identifier for reinitialization
+            "ingredient_embeddings": self.ingredient_embeddings.tolist(),
+            "embedding_time": self.embedding_time,
+        }
+
+        # Save metadata into json file
+        with open(file_path, "w") as f:
+            json.dump(metadata, f)
+        print(f"Metadata saved to {file_path}")
