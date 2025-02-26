@@ -13,7 +13,7 @@ from io import StringIO
 class BaseFaissIndex:
     def __init__(self, metadata_file_path: str, index_file_path: str = None):
         # Load index (if applicable)
-            self.index = faiss.read_index(index_file_path) if index_file_path else None
+        self.index = faiss.read_index(index_file_path) if index_file_path else None
 
         # Load metadata
         with open(metadata_file_path, "r") as f:
