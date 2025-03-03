@@ -2,6 +2,12 @@ from faiss_indexes import FlatIndex
 
 import time
 
+#########################
+### Create embeddings ###
+#########################
+# recipes = pd.read_csv("simple_recipes.csv")
+# recipe_embedding = RecipeEmbeddings(recipes)
+# recipe_embedding.save_embeddings("recipe_embeddings.json")
 
 # Create flat index
 start = time.perf_counter()
