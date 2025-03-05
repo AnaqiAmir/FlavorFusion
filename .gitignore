@@ -4,3 +4,7 @@ lib/
 include/
 pyvenv.cfg
 /models/dev/__pycache__
+node_modules
+.next
+next-env.d.ts
+api/__pycache__
