@@ -1,0 +1,21 @@
+nutrition_map:
+  calories: calories
+  fat: total_fat
+  sugar: sugar
+  sodium: sodium
+  protein: protein
+  "saturated fat": saturated_fat
+  carbs: carbs
+
+allergen_path: "assets/allergens.json"
+diet_path: "assets/diets.json"
+ingr_path: "assets/ingredient_map.csv"
+
+models:
+  spacy_model: "en_core_web_lg"
+  allergen_bert: "bert-base-uncased"
+  ingr_model: "paraphrase-MiniLM-L6-v2"
+
+thresholds:
+  fuzzy_match: 85
+  semantic_similarity: 0.75

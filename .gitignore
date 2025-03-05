@@ -1,1 +1,6 @@
-data/
+/data
+bin/
+lib/
+include/
+pyvenv.cfg
+/models/dev/__pycache__
