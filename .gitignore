@@ -8,3 +8,5 @@ node_modules
 .next
 next-env.d.ts
 api/__pycache__
+.venv
+.env
