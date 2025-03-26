@@ -56,8 +56,8 @@ def recommend_recipes(user_input: str) -> str:
 
 @tool
 def final_answer(answer: str) -> str:
-    """Useful for providing the final answer to the user."""
-    print("Hi im the final answer")
+    """Format the LLM output to provide an appropriate answer to the user."""
+    # TODO: Implement this function
     return answer
 
 
