@@ -131,7 +131,7 @@ while True:
         stream_graph_updates(user_input)
     except:
         # fallback if input() is not available
-        user_input = "What do you know about LangGraph?"
+        user_input = "Invalid input. Can you please try again?"
         print("User: " + user_input)
         stream_graph_updates(user_input)
         break
