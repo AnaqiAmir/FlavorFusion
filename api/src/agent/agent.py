@@ -12,8 +12,7 @@ from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from api.src.nlp.NLSPipeline import extract_nutritional_features
-from api.src.models.dev.faiss_indexes import FlatIndex
+from api.src.agent.tool_registry import tool_registry
 
 from dotenv import load_dotenv
 
@@ -21,48 +20,9 @@ from dotenv import load_dotenv
 # Load env
 load_dotenv()
 
-# Load index
-index = FlatIndex("../../../recipe_embeddings_small.json")
-
-
-# Define tools
-@tool
-def recommend_recipes(user_input: str) -> str:
-    """Takes in user input, extracts relevant features, and output recommended recipes from database"""
-
-    print(f"\n Parsed user input: \n {user_input} \n")
-
-    extracted_features = extract_nutritional_features(user_input)
-
-    print(f"\n Extracted features: \n {extracted_features} \n")
-
-    recs = index.recommend_recipes(
-        user_ingredients=extracted_features.user_ingredients,
-        allergens=extracted_features.allergens,
-        calories=extracted_features.calories,
-        total_fat=extracted_features.total_fat,
-        protein=extracted_features.protein,
-        saturated_fat=extracted_features.saturated_fat,
-        carbs=extracted_features.carbs,
-        sodium=extracted_features.sodium,
-        sugar=extracted_features.sugar,
-        top_n=10,
-    )
-
-    print(f"\n recs: \n {recs} \n")
-
-    return ", ".join(recs)
-
-
-@tool
-def final_answer(answer: str) -> str:
-    """Format the LLM output to provide an appropriate answer to the user."""
-    # TODO: Implement this function
-    return answer
-
 
 # Define tool node
-tools = [recommend_recipes, final_answer]
+tools = tool_registry.get_all_tools()
 tool_node = ToolNode(tools)  # A single node that contains all the tools
 
 
