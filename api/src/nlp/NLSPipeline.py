@@ -1,8 +1,8 @@
 import os
 import json
-from typing import List, Optional
+from typing import List, Optional, Tuple
 from pydantic import BaseModel, Field
-from langchain.chat_models import ChatOpenAI
+from langchain_community.chat_models import ChatOpenAI
 from langchain.prompts.chat import (
     ChatPromptTemplate,
     SystemMessagePromptTemplate,
@@ -14,13 +14,7 @@ from langchain.output_parsers import PydanticOutputParser
 
 # Define the output schema using a Pydantic model.
 class NutritionFeatures(BaseModel):
-    calories: Optional[float] = Field(None, description="Calories in kcal")
-    total_fat: Optional[float] = Field(None, description="Total fat in grams")
-    saturated_fat: Optional[float] = Field(None, description="Saturated fat in grams")
-    carbs: Optional[float] = Field(None, description="Carbohydrates in grams")
-    sugar: Optional[float] = Field(None, description="Sugar in grams")
-    sodium: Optional[float] = Field(None, description="Sodium in mg")
-    protein: Optional[float] = Field(None, description="Protein in grams")
+    user_ingredients: List[str] = Field(default_factory=list)
     allergens: List[str] = Field(
         default_factory=list,
         description=(
@@ -28,11 +22,26 @@ class NutritionFeatures(BaseModel):
             "tree nuts, peanut, milk, wheat, soy, fish, shellfish, eggs, sesame, pollen, sulfites."
         ),
     )
-    liked_ingredients: List[str] = Field(
-        default_factory=list, description="List of ingredients the user likes"
+    calories: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
     )
-    disliked_ingredients: List[str] = Field(
-        default_factory=list, description="List of ingredients the user dislikes"
+    total_fat: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
+    )
+    saturated_fat: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
+    )
+    carbs: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
+    )
+    sugar: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
+    )
+    sodium: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
+    )
+    protein: Optional[Tuple[Optional[float], Optional[float]]] = Field(
+        default_factory=lambda: (None, None)
     )
 
 
@@ -64,7 +73,9 @@ def extract_nutritional_features(user_input: str) -> NutritionFeatures:
     # formatting instructions, and explicit allergen categorization.
     human_template = (
         "Extract the following nutritional features from the user's input. "
-        "For numerical fields, return a number (or null if unspecified). "
+        "For numerical fields (calories, total_fat, saturated_dat, carbs, sugar, sodium, protein), return a number (or null if unspecified)."
+        "If no specific numbers are provided for numerical fields, take liberty in filling out what is appropriate numerically."
+        "Ensure that the fields are either filled out as a pair with a range (e.g. calories=[400,500]) or none at all (e.g. sugar=[null, 10.0] is unacceptable)."
         "For list fields, return a JSON array of strings. "
         "Ensure that allergens are only taken from the following categories: "
         "tree nuts, peanut, milk, wheat, soy, fish, shellfish, eggs, sesame, pollen, sulfites. "
@@ -83,12 +94,12 @@ def extract_nutritional_features(user_input: str) -> NutritionFeatures:
     chain = LLMChain(llm=llm, prompt=chat_prompt)
 
     # Run the chain by providing the user input and format instructions.
-    response = chain.run(
+    response = chain.invoke(
         {"user_input": user_input, "format_instructions": format_instructions}
     )
 
     # Parse the LLM's response using our structured output parser.
-    features = output_parser.parse(response)
+    features = output_parser.parse(response["text"])
     return features
 
 

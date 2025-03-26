@@ -3,8 +3,13 @@ bin/
 lib/
 include/
 pyvenv.cfg
-/models/dev/__pycache__
+/api/src/models/dev/__pycache__/
 node_modules
 .next
 next-env.d.ts
 api/__pycache__
+.venv
+.env
+*.json
+*.pyc
+.DS_Store
