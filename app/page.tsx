@@ -13,16 +13,39 @@ export default function Home() {
   );
   const [input, setInput] = useState("");
 
-  const handleSend = () => {
-    if (input.trim()) {
-      setMessages([...messages, { role: "user", content: input }]);
-      // Simulate AI response
-      setTimeout(() => {
-        setMessages((prev) => [
-          ...prev,
-          { role: "assistant", content: "This is a simulated AI response." },
-        ]);
-      }, 1000);
+  const handleSend = async () => {
+    if (!input.trim()) return;
+
+    setMessages((prev) => [...prev, { role: "user", content: input }]);
+
+    try {
+      const res = await fetch("http://127.0.0.1:5328/chat", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ message: input }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP error! status: ${res.status}`);
+      }
+
+      const data = await res.json();
+      setMessages((prev) => [
+        ...prev,
+        { role: "assistant", content: data.response },
+      ]);
+    } catch (err) {
+      console.error("Error sending message:", err);
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: "assistant",
+          content: "Something went wrong. Please try again.",
+        },
+      ]);
+    } finally {
       setInput("");
     }
   };

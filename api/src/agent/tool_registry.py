@@ -7,9 +7,11 @@ from api.src.models.dev.faiss_indexes import FlatIndex
 # Load env variables
 load_dotenv()
 
+# Dynamically build the path to the JSON file
+base_dir = os.path.dirname(os.path.abspath(__file__))
+json_path = os.path.join(base_dir, "../../../recipe_embeddings_small.json")
 
-# Create index instance
-index = FlatIndex("recipe_embeddings_small.json")
+index = FlatIndex(json_path)
 
 
 class ToolRegistry:
