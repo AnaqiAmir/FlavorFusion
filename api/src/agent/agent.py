@@ -16,15 +16,12 @@ from api.src.agent.tool_registry import tool_registry
 
 from dotenv import load_dotenv
 
-
 # Load env
 load_dotenv()
 
-
 # Define tool node
 tools = tool_registry.get_all_tools()
-tool_node = ToolNode(tools)  # A single node that contains all the tools
-
+tool_node = ToolNode(tools)
 
 # Define llm
 llm = ChatOpenAI().bind_tools(tools)
@@ -51,10 +48,8 @@ def agent(state: MessagesState) -> MessagesState:
 
 # Define graph
 workflow = StateGraph(MessagesState)
-
 workflow.add_node("agent", agent)
 workflow.add_node("tools", tool_node)
-
 workflow.add_edge(START, "agent")
 workflow.add_conditional_edges("agent", router, {"tools": "tools", "end": END})
 workflow.add_edge("tools", "agent")
@@ -64,34 +59,15 @@ memory = MemorySaver()
 app = workflow.compile(checkpointer=memory)
 
 
-# IO
-def stream_graph_updates(user_input: str) -> None:
+# Expose this to be used in Flask
+def stream_graph_updates(user_input: str) -> str:
     """I/O for user to interact with the program"""
+    final_response = None
     for event in app.stream(
         {"messages": [{"role": "user", "content": user_input}]},
         config={"configurable": {"thread_id": "1"}},
     ):
-        entity = [list(event)[0]][0].upper()  # either agent or tool
-        print(f"##### {entity} MESSAGE #####")
-        print(event[list(event)[0]]["messages"][-1].content)
-        print("\n")
-
-
-while True:
-    try:
-        user_input = input("User: ")
-        if user_input.lower() in ["quit", "exit", "q"]:
-            print("Goodbye!")
-            break
-
-        print("##### HUMAN MESSAGE #####")
-        print(user_input)
-        print("\n")
-
-        stream_graph_updates(user_input)
-    except:
-        # fallback if input() is not available
-        user_input = "Invalid input. Can you please try again?"
-        print("User: " + user_input)
-        stream_graph_updates(user_input)
-        break
+        node = list(event)[0]
+        messages = event[node]["messages"]
+        final_response = messages[-1].content
+    return final_response
